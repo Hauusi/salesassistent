@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # --- Anthropic (classification, sentiment, draft generation) ---
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-5"
+    anthropic_model: str = "claude-sonnet-5"
 
     # --- Voyage AI (embeddings for case/RAG matching) ---
     voyage_api_key: str = ""
