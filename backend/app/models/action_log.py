@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy import Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.base import TenantScopedMixin, TimestampMixin, UUIDPKMixin

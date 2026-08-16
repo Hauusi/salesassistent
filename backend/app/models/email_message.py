@@ -41,6 +41,9 @@ class EmailMessage(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     # Gmail identifiers, needed to thread replies and avoid re-processing.
     gmail_message_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     gmail_thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # RFC822 Message-ID header (distinct from Gmail's internal id above) -
+    # needed for correct In-Reply-To/References headers when sending a reply.
+    rfc822_message_id: Mapped[str | None] = mapped_column(String(998), nullable=True)
 
     subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
     sender_address: Mapped[str] = mapped_column(String(320), nullable=False)
