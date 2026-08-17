@@ -6,6 +6,7 @@ from app.models.contact import Contact
 from app.models.draft import Draft
 from app.models.email_message import EmailMessage
 from app.models.mailbox import Mailbox
+from app.models.product import Product
 from app.models.tenant import Tenant
 from app.models.user import User
 
@@ -18,6 +19,7 @@ __all__ = [
     "Draft",
     "EmailMessage",
     "Mailbox",
+    "Product",
     "Tenant",
     "User",
 ]
