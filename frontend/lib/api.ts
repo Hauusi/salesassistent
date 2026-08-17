@@ -9,12 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    cache: "no-store",
-  });
+async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -27,6 +22,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+    cache: "no-store",
+  });
+  return handleResponse<T>(res);
+}
+
+/** For multipart/form-data uploads - the browser sets the boundary itself,
+ * so no Content-Type header must be set explicitly here. */
+async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+    cache: "no-store",
+  });
+  return handleResponse<T>(res);
 }
 
 export interface Contact {
@@ -113,6 +128,38 @@ export interface Mailbox {
   created_at: string;
 }
 
+export interface Product {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  sku: string | null;
+  price: string | null;
+  currency: string;
+  availability: string | null;
+  specs: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductInput {
+  name: string;
+  description: string | null;
+  category: string | null;
+  sku: string | null;
+  price: number | null;
+  currency: string;
+  availability: string | null;
+  specs: Record<string, unknown>;
+}
+
+export interface ProductImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export const api = {
   listDrafts: (status?: string) =>
     request<Draft[]>(`/api/drafts${status ? `?status=${status}` : ""}`),
@@ -159,4 +206,29 @@ export const api = {
     request<{ job_id: string }>(`/api/mailboxes/${id}/poll-now`, {
       method: "POST",
     }),
+
+  listProducts: (params?: { q?: string; category?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.q) search.set("q", params.q);
+    if (params?.category) search.set("category", params.category);
+    const qs = search.toString();
+    return request<Product[]>(`/api/knowledge/products${qs ? `?${qs}` : ""}`);
+  },
+  createProduct: (payload: ProductInput) =>
+    request<Product>("/api/knowledge/products", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateProduct: (id: string, payload: Partial<ProductInput>) =>
+    request<Product>(`/api/knowledge/products/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteProduct: (id: string) =>
+    request<void>(`/api/knowledge/products/${id}`, { method: "DELETE" }),
+  importProductsCsv: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return requestForm<ProductImportResult>("/api/knowledge/products/import", formData);
+  },
 };
