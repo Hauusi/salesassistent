@@ -59,7 +59,13 @@ def credentials_from_mailbox(mailbox: Mailbox) -> Credentials:
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
-        scopes=(mailbox.granted_scopes or "").split() or None,
+        # Deliberately no `scopes=` here. google-auth's refresh_grant()
+        # echoes any configured scopes back to Google's token endpoint on
+        # every refresh_token grant - and Google's endpoint rejects that
+        # for web-application clients when the set includes `openid`
+        # (RefreshError: invalid_scope). A refresh_token grant doesn't
+        # need the scope re-stated at all; the token already carries its
+        # original grant server-side.
     )
 
 

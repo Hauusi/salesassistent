@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.db import async_session_factory
+from app.db import async_session_factory, engine
 from app.models.mailbox import Mailbox
 from app.services import gmail_client
 from app.services.pipeline import process_incoming_email
@@ -52,9 +52,24 @@ async def _poll_mailbox_async(mailbox_id: str) -> int:
     return processed_count
 
 
+async def _poll_mailbox_and_dispose(mailbox_id: str) -> int:
+    try:
+        return await _poll_mailbox_async(mailbox_id)
+    finally:
+        # asyncpg connections are bound to the event loop they were
+        # opened on. asyncio.run() below tears down its loop when this
+        # call returns, so the pooled connections it opened would be
+        # unusable (and raise "attached to a different loop") the next
+        # time this process reuses the module-level `engine`. Dispose the
+        # pool before the loop closes so the next call starts clean.
+        # Cheap even though RQ normally forks a fresh process per job -
+        # protects a SimpleWorker/--burst deployment too.
+        await engine.dispose()
+
+
 def poll_mailbox_job(mailbox_id: str) -> int:
     """RQ entrypoint: fetches and processes new mail for one mailbox."""
-    return asyncio.run(_poll_mailbox_async(mailbox_id))
+    return asyncio.run(_poll_mailbox_and_dispose(mailbox_id))
 
 
 async def _poll_all_active_mailboxes_async() -> list[str]:
@@ -63,12 +78,23 @@ async def _poll_all_active_mailboxes_async() -> list[str]:
         return [str(mid) for mid in result.scalars().all()]
 
 
+async def _list_active_mailboxes_and_dispose() -> list[str]:
+    try:
+        return await _poll_all_active_mailboxes_async()
+    finally:
+        # Same "different loop" hazard as above, but here it's the
+        # observed bug: the scheduler is one long-lived process that
+        # calls asyncio.run() every tick without ever exiting, so this
+        # engine.dispose() runs on essentially every poll cycle.
+        await engine.dispose()
+
+
 def enqueue_poll_for_all_active_mailboxes() -> int:
     """Called by the scheduler on each tick. Enqueues one poll job per
     connected, active mailbox."""
     from app.workers.queue import get_queue
 
-    mailbox_ids = asyncio.run(_poll_all_active_mailboxes_async())
+    mailbox_ids = asyncio.run(_list_active_mailboxes_and_dispose())
     queue = get_queue()
     for mailbox_id in mailbox_ids:
         queue.enqueue(poll_mailbox_job, mailbox_id, job_timeout=300)
