@@ -1,10 +1,13 @@
 """Test configuration.
 
-Points the app at a dedicated `salesassistent_test` Postgres database
-(with the pgvector extension enabled) so DB-backed tests (case matching,
-pipeline) exercise real pgvector cosine-distance queries instead of a
-mock. Env vars are set before any `app.*` module is imported, since several
-modules read settings once at import time.
+Points the app at a dedicated `salesassistent_test` Postgres database so
+DB-backed tests (case matching, pipeline) exercise real pgvector
+cosine-distance queries instead of a mock. The database itself must exist
+(`createdb salesassistent_test` - see README "Tests"), but the `_schema`
+fixture below enables the pgvector extension on it itself, so no manual
+`CREATE EXTENSION` step is needed. Env vars are set before any `app.*`
+module is imported, since several modules read settings once at import
+time.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base, engine
@@ -35,6 +39,13 @@ async def _schema() -> AsyncIterator[None]:
     # pool first so this test starts with connections on its own loop.
     await engine.dispose()
     async with engine.begin() as conn:
+        # EmailMessage.embedding is a pgvector column (see
+        # app/models/email_message.py) - create_all() fails with
+        # "type vector does not exist" unless this extension is enabled on
+        # this database first. IF NOT EXISTS makes this idempotent, so a
+        # fresh `createdb salesassistent_test` is the only manual setup
+        # step left (see README "Tests").
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with engine.begin() as conn:

@@ -167,14 +167,19 @@ Migrationen müssen einmalig separat laufen:
 ```bash
 cd backend
 source .venv/bin/activate
-createdb salesassistent_test   # einmalig; Extension wird von den Tests erwartet
-psql salesassistent_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+createdb salesassistent_test   # einmalig - die DB selbst muss existieren
 pytest
 ```
 
 Die Tests laufen gegen eine echte Postgres+pgvector-Datenbank (Case-Matching
 ist eine SQL/pgvector-Abfrage — ein DB-loser Test würde die eigentliche
-Logik nicht prüfen). Anthropic-Aufrufe sind durchgängig gemockt
+Logik nicht prüfen). Die `pgvector`-Extension wird von der `_schema`-Fixture
+(`tests/conftest.py`) selbst per `CREATE EXTENSION IF NOT EXISTS vector`
+aktiviert, dafür ist kein manueller Schritt mehr nötig — vorausgesetzt, das
+verwendete Postgres-Image/-Paket enthält `pgvector` überhaupt (bei
+`docker-compose.yml` der Fall: `pgvector/pgvector:pg16`; bei einer
+System-Postgres-Installation ggf. das `postgresql-<version>-pgvector`-Paket
+nachinstallieren). Anthropic-Aufrufe sind durchgängig gemockt
 (`tests/mocks.py`), es werden keine echten LLM-Calls ausgeführt. Abgedeckt:
 
 - `test_classification.py` — Mapping LLM-Tool-Antwort → `ClassificationResult`,
