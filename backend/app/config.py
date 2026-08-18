@@ -45,7 +45,14 @@ class Settings(BaseSettings):
 
     # --- Anthropic (classification, sentiment, draft generation) ---
     anthropic_api_key: str = ""
+    # Draft generation needs Sonnet's language/context quality - it writes
+    # the actual customer-facing reply text.
     anthropic_model: str = "claude-sonnet-5"
+    # Classification is a fixed-enum categorization task (2 axes, forced
+    # tool use) - Haiku is materially cheaper and accurate enough for it,
+    # see app/services/classification.py. Kept as its own setting so it can
+    # be tuned/rolled back independently of the draft-generation model.
+    anthropic_classification_model: str = "claude-haiku-4-5"
 
     # --- Voyage AI (embeddings for case/RAG matching) ---
     voyage_api_key: str = ""

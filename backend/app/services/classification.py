@@ -15,6 +15,7 @@ from anthropic import AsyncAnthropic
 
 from app.config import get_settings
 from app.models.enums import TypKategorie, WichtigkeitsKategorie
+from app.services.email_text import strip_quoted_reply
 from app.services.llm_client import get_anthropic_client
 
 settings = get_settings()
@@ -90,7 +91,11 @@ class ClassificationResult:
 
 
 def _build_user_message(*, subject: str | None, sender_address: str, body: str) -> str:
-    truncated_body = body[:6000]
+    # Classification only needs the new message, not the quoted thread
+    # history Gmail includes in the plain-text body - stripping it first
+    # means the 6000-char safety cap is spent on actual new content instead
+    # of a mail's own copy of everything that came before it.
+    truncated_body = strip_quoted_reply(body)[:6000]
     return (
         f"Absender: {sender_address}\n"
         f"Betreff: {subject or '(kein Betreff)'}\n\n"
@@ -108,9 +113,19 @@ async def classify_email(
     client = client or get_anthropic_client()
 
     response = await client.messages.create(
-        model=settings.anthropic_model,
+        model=settings.anthropic_classification_model,
         max_tokens=1024,
-        system=_SYSTEM_PROMPT,
+        # A breakpoint on the (only) system block also covers the tools
+        # block, since tools render before system - see
+        # https://docs.claude.com/en/docs/build-with-claude/prompt-caching.
+        # Both are static/identical across every classify_email call. Note:
+        # system+tool schema here (~500 tokens) is currently below Haiku's
+        # ~4096-token minimum cacheable prefix, so this is a no-op today
+        # (no error, no charge - cache_creation_input_tokens stays 0), not
+        # a current cost saving. It's forward-compatible for free: as soon
+        # as this prompt grows (few-shot examples, tenant-specific rules),
+        # it starts getting cached with zero further code changes.
+        system=[{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[_CLASSIFY_TOOL],
         tool_choice={"type": "tool", "name": "classify_email"},
         messages=[

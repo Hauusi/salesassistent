@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.models.email_message import EmailMessage
 from app.models.enums import TypKategorie
 from app.models.product import Product
+from app.services.email_text import strip_quoted_reply
 from app.services.llm_client import get_anthropic_client
 from app.services.product_search import format_products_for_prompt, search_products
 
@@ -85,10 +86,16 @@ def _format_context(history: list[EmailMessage]) -> str:
         return "(kein bisheriger Verlauf mit diesem Kontakt/Case gefunden)"
     parts = []
     for msg in reversed(history):  # chronological
+        # Each stored mail's raw_content can itself carry the thread quoted
+        # below it (see app.services.email_text) - stripping that before
+        # truncating means the 2000-char budget per history mail is spent
+        # on that mail's own new content, not a repeat of mails already
+        # included elsewhere in this same RAG context.
+        body = strip_quoted_reply(msg.raw_content)[:2000]
         parts.append(
             f"--- Mail vom {msg.received_at.isoformat()} von {msg.sender_address} ---\n"
             f"Betreff: {msg.subject or '(kein Betreff)'}\n"
-            f"{msg.raw_content[:2000]}"
+            f"{body}"
         )
     return "\n\n".join(parts)
 
@@ -126,17 +133,28 @@ async def generate_draft(
                 f"(nutze diese konkreten Werte in der Antwort):\n{format_products_for_prompt(matched_products)}"
             )
 
+    # Strip the quoted thread from the new mail too - it's already covered
+    # by context_text above (which pulls the actual prior mails from the
+    # DB), so re-sending it a second time as part of this mail's own body
+    # would be pure duplication.
+    new_mail_body = strip_quoted_reply(email.raw_content)[:6000]
+
     user_message = (
         f"Bisheriger Verlauf (RAG-Kontext, chronologisch):\n{context_text}\n\n"
         f"---\n\nZu beantwortende neue Mail von {email.sender_address}:\n"
-        f"Betreff: {email.subject or '(kein Betreff)'}\n\n{email.raw_content[:6000]}"
+        f"Betreff: {email.subject or '(kein Betreff)'}\n\n{new_mail_body}"
         f"{product_context_block}"
     )
 
     response = await client.messages.create(
         model=settings.anthropic_model,
         max_tokens=1500,
-        system=_SYSTEM_PROMPT,
+        # See classification.py for the caching rationale/tradeoffs - same
+        # pattern here. This system+tool prefix (~350-400 tokens) is below
+        # Sonnet's 1024-token cacheable minimum today, so it's a no-op right
+        # now rather than a current saving; it activates automatically if
+        # this prompt grows later.
+        system=[{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[_DRAFT_TOOL],
         tool_choice={"type": "tool", "name": "generate_reply_draft"},
         messages=[{"role": "user", "content": user_message}],

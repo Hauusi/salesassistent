@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import get_settings
 from app.models.enums import TypKategorie, WichtigkeitsKategorie
 from app.services.classification import classify_email
 from tests.fixtures.emails import (
@@ -98,6 +99,57 @@ async def test_classify_email_sends_forced_tool_choice_and_content() -> None:
     user_content = call["messages"][0]["content"]
     assert ANFRAGE_MAIL["subject"] in user_content
     assert ANFRAGE_MAIL["sender_address"] in user_content
+
+
+async def test_classify_email_uses_the_cheaper_classification_model() -> None:
+    """Classification is a fixed-enum categorization task, not language
+    generation - it should run on the cheaper model configured separately
+    from draft generation's anthropic_model (cost optimization, see
+    app/services/draft_generation.py for the Sonnet counterpart)."""
+    client = _client_for(ANFRAGE_MAIL["expected"])
+
+    await classify_email(
+        subject=ANFRAGE_MAIL["subject"],
+        sender_address=ANFRAGE_MAIL["sender_address"],
+        body=ANFRAGE_MAIL["body"],
+        client=client,
+    )
+
+    call = client.messages.calls[0]
+    assert call["model"] == get_settings().anthropic_classification_model
+
+
+async def test_classify_email_marks_system_prompt_cacheable() -> None:
+    client = _client_for(ANFRAGE_MAIL["expected"])
+
+    await classify_email(
+        subject=ANFRAGE_MAIL["subject"],
+        sender_address=ANFRAGE_MAIL["sender_address"],
+        body=ANFRAGE_MAIL["body"],
+        client=client,
+    )
+
+    call = client.messages.calls[0]
+    assert call["system"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_classify_email_strips_quoted_thread_from_prompt() -> None:
+    client = _client_for(ANFRAGE_MAIL["expected"])
+    body = (
+        f"{ANFRAGE_MAIL['body']}\n\n"
+        "Am Mo., 10. Aug. 2026 um 09:00 schrieb Alt Absender <alt@example.com>:\n"
+        "> Ein alter, fuer die Klassifikation irrelevanter Thread-Verlauf."
+    )
+
+    await classify_email(
+        subject=ANFRAGE_MAIL["subject"],
+        sender_address=ANFRAGE_MAIL["sender_address"],
+        body=body,
+        client=client,
+    )
+
+    user_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "alter, fuer die Klassifikation irrelevanter" not in user_content
 
 
 async def test_classify_email_raises_clear_error_without_tool_use() -> None:

@@ -132,3 +132,39 @@ async def test_generate_draft_non_anfrage_skips_product_search_entirely(
     sent_prompt = client.messages.calls[0]["messages"][0]["content"]
     assert "Produkt-Wissensbasis" not in sent_prompt
     assert "Produkte" not in rag_summary
+
+
+async def test_generate_draft_marks_system_prompt_cacheable(
+    db_session: AsyncSession, mailbox: Mailbox
+) -> None:
+    email = await _make_email(
+        db_session, mailbox, typ=TypKategorie.KEINER, content="Kurze Frage zum Liefertermin.",
+    )
+
+    client = _fake_client()
+    await generate_draft(db_session, email=email, client=client)
+
+    call = client.messages.calls[0]
+    assert call["system"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_generate_draft_strips_quoted_thread_from_new_mail(
+    db_session: AsyncSession, mailbox: Mailbox
+) -> None:
+    email = await _make_email(
+        db_session,
+        mailbox,
+        typ=TypKategorie.KEINER,
+        content=(
+            "Danke, das reicht mir.\n\n"
+            "Am Mo., 10. Aug. 2026 um 09:00 schrieb Alt Absender <alt@example.com>:\n"
+            "> Ein alter, fuer den Entwurf irrelevanter Thread-Verlauf."
+        ),
+    )
+
+    client = _fake_client()
+    await generate_draft(db_session, email=email, client=client)
+
+    sent_prompt = client.messages.calls[0]["messages"][0]["content"]
+    assert "Danke, das reicht mir." in sent_prompt
+    assert "irrelevanter Thread-Verlauf" not in sent_prompt
