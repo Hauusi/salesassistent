@@ -99,6 +99,25 @@ async def search_products(
     return list(result.scalars().all())
 
 
+# `Product.description` (free Text) and `Product.specs` (free-form JSONB,
+# e.g. from CSV import - see app/services/product_import.py) have no length
+# limit at the DB/schema level. Left uncapped here, a handful of verbose
+# catalog entries (long marketing copy, a specs dict with dozens of keys)
+# would silently dominate the draft-generation prompt - capped instead so
+# the model still gets the concrete values it needs to quote (price,
+# availability, key specs) without paying for the full text of every match.
+_MAX_DESCRIPTION_CHARS = 220
+_MAX_SPECS_ENTRIES = 6
+_MAX_SPECS_CHARS = 200
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
 def format_products_for_prompt(products: list[Product]) -> str:
     if not products:
         return ""
@@ -114,10 +133,14 @@ def format_products_for_prompt(products: list[Product]) -> str:
         if p.availability:
             parts.append(f"Verfügbarkeit: {p.availability}")
         if p.specs:
-            specs_str = ", ".join(f"{k}: {v}" for k, v in p.specs.items())
-            parts.append(f"Specs: {specs_str}")
+            # Most specific/short fields first tend to be the most useful
+            # to quote back to the customer; a dict with many entries is
+            # capped by count, and the rendered string capped by length as
+            # a second safety net against a single oversized value.
+            specs_str = ", ".join(f"{k}: {v}" for k, v in list(p.specs.items())[:_MAX_SPECS_ENTRIES])
+            parts.append(f"Specs: {_truncate(specs_str, _MAX_SPECS_CHARS)}")
         line = " | ".join(parts)
         if p.description:
-            line += f"\n  Beschreibung: {p.description}"
+            line += f"\n  Beschreibung: {_truncate(p.description, _MAX_DESCRIPTION_CHARS)}"
         lines.append(f"- {line}")
     return "\n".join(lines)

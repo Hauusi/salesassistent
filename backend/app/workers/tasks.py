@@ -45,6 +45,25 @@ async def _poll_mailbox_async(mailbox_id: str) -> int:
             result = await process_incoming_email(db, mailbox=mailbox, fetched=fetched)
             if result is not None:
                 processed_count += 1
+            # Commit per message, not once after the whole batch. By this
+            # point process_incoming_email has already spent real Claude
+            # tokens on classify_email (and generate_draft, if
+            # antwort_erforderlich) - only flush()ed, not committed. If a
+            # later message in this batch raises (Gmail API hiccup, a
+            # transient Claude error, ...), the `async with` block below
+            # exits without ever reaching the old end-of-loop commit,
+            # silently discarding every already-processed message in this
+            # run. The idempotency check at the top of
+            # process_incoming_email (SELECT by gmail_message_id) can't
+            # catch that on retry, because the row was never actually
+            # persisted - so the next poll cycle re-fetches and
+            # re-classifies/re-drafts the same mails from scratch,
+            # multiplying token spend on every mailbox with even
+            # occasional transient failures. Committing here means a
+            # mid-batch failure only costs a re-fetch from Gmail for the
+            # remaining messages, never a re-spend of Claude tokens on
+            # mail already processed.
+            await db.commit()
 
         mailbox.last_synced_at = datetime.now(timezone.utc)
         await db.commit()

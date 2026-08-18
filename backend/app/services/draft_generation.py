@@ -20,6 +20,7 @@ from app.models.product import Product
 from app.services.email_text import strip_quoted_reply
 from app.services.llm_client import get_anthropic_client
 from app.services.product_search import format_products_for_prompt, search_products
+from app.services.token_metrics import log_prompt_breakdown
 
 settings = get_settings()
 
@@ -43,19 +44,21 @@ _DRAFT_TOOL = {
     },
 }
 
+# Trimmed for filler only - the anti-hallucination and product-grounding
+# rules below are safety-critical (fabricated prices/deadlines/promises in
+# a customer-facing draft are far costlier than the tokens), so their
+# substance is kept even though the wording is tighter.
 _SYSTEM_PROMPT = (
-    "Du bist der Entwurfs-Assistent eines Vertriebsteams. Du erstellst Antwortentwürfe "
-    "auf eingehende Kunden-E-Mails, die anschließend von einem Menschen geprüft, "
-    "bearbeitet und erst nach expliziter Freigabe versendet werden. Nutze den "
-    "bereitgestellten Verlauf als Kontext (RAG), erfinde keine Fakten (Preise, "
-    "Liefertermine, Zusagen), die nicht aus dem Kontext hervorgehen - weise stattdessen "
-    "im Entwurf darauf hin, dass das noch zu prüfen ist. Wenn dir passende Produkte aus "
-    "der Produkt-Wissensbasis mitgegeben werden, nutze deren konkrete Preise, "
-    "Verfügbarkeit und Specs direkt in der Antwort, statt pauschal nach weiteren Details "
-    "zu fragen - aber nur für exakt die dort genannten Werte, erfinde nichts darüber "
-    "hinaus. Wenn kein passendes Produkt in der Wissensbasis gefunden wurde, sag das "
-    "nicht explizit, sondern beantworte die Anfrage so gut wie mit dem übrigen Kontext "
-    "möglich und bitte bei Bedarf um Präzisierung."
+    "Du bist der Entwurfs-Assistent eines Vertriebsteams: Du schreibst Antwortentwürfe "
+    "auf Kunden-E-Mails, die vor dem Versand von einem Menschen geprüft und freigegeben "
+    "werden. Nutze den mitgelieferten Verlauf (RAG) als Kontext. Erfinde keine Fakten "
+    "(Preise, Liefertermine, Zusagen) - was nicht im Kontext steht, kennzeichne im "
+    "Entwurf als noch zu prüfen. Werden passende Produkte aus der Wissensbasis "
+    "mitgegeben, nutze deren konkrete Preise, Verfügbarkeit und Specs direkt in der "
+    "Antwort statt pauschal nachzufragen - aber nur exakt diese Werte, nichts darüber "
+    "hinaus erfinden. Fehlt ein passendes Produkt, sag das nicht explizit, sondern "
+    "beantworte die Anfrage so gut wie mit dem übrigen Kontext möglich und bitte bei "
+    "Bedarf um Präzisierung."
 )
 
 
@@ -158,6 +161,17 @@ async def generate_draft(
         tools=[_DRAFT_TOOL],
         tool_choice={"type": "tool", "name": "generate_reply_draft"},
         messages=[{"role": "user", "content": user_message}],
+    )
+
+    log_prompt_breakdown(
+        "generate_draft",
+        model=settings.anthropic_model,
+        system=_SYSTEM_PROMPT,
+        tools=[_DRAFT_TOOL],
+        mail_content=f"Betreff: {email.subject or ''}\n\n{new_mail_body}",
+        product_context=product_context_block,
+        other_context=context_text,
+        usage=getattr(response, "usage", None),
     )
 
     tool_use = next((block for block in response.content if getattr(block, "type", None) == "tool_use"), None)

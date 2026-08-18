@@ -137,3 +137,26 @@ def test_format_products_for_prompt_includes_price_and_specs() -> None:
 
 def test_format_products_for_prompt_empty_list() -> None:
     assert format_products_for_prompt([]) == ""
+
+
+def test_format_products_for_prompt_caps_long_description_and_specs() -> None:
+    """description/specs are free-form, unbounded fields (Text / JSONB) -
+    a verbose catalog entry must not blow up the draft-generation prompt,
+    see app.services.product_search._MAX_DESCRIPTION_CHARS /
+    _MAX_SPECS_ENTRIES / _MAX_SPECS_CHARS."""
+    product = Product(
+        name="Aluminiumprofil AP-40",
+        description="X" * 1000,
+        specs={f"Spec{i}": "Y" * 30 for i in range(20)},
+    )
+
+    text = format_products_for_prompt([product])
+
+    # Truncated with a marker, not silently cut off mid-count.
+    assert "X" * 1000 not in text
+    assert "…" in text
+    # Only a bounded number of spec entries show up.
+    assert "Spec19" not in text
+    assert "Spec0" in text
+    # Overall size stays small regardless of how much input data there was.
+    assert len(text) < 600
