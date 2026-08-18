@@ -9,6 +9,7 @@ parsing free text.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -17,9 +18,11 @@ from app.config import get_settings
 from app.models.enums import TypKategorie, WichtigkeitsKategorie
 from app.services.email_text import strip_quoted_reply
 from app.services.llm_client import get_anthropic_client
+from app.services.newsletter_prefilter import prefilter_newsletter_reason
 from app.services.token_metrics import log_prompt_breakdown
 
 settings = get_settings()
+logger = logging.getLogger("app.llm.tokens")
 
 # Kept information-dense on purpose (one line per enum value covers the
 # distinguishing signal a forced tool call needs) - trimmed to remove
@@ -108,8 +111,29 @@ async def classify_email(
     subject: str | None,
     sender_address: str,
     body: str,
+    list_unsubscribe: str | None = None,
     client: AsyncAnthropic | None = None,
 ) -> ClassificationResult:
+    # Cheap, regex-only pre-check before spending any tokens - see
+    # app/services/newsletter_prefilter.py for the (conservative) rules.
+    # Only ever short-circuits to 'newsletter'; anything it isn't sure
+    # about falls through to the Claude call below unchanged.
+    prefilter_reason = prefilter_newsletter_reason(
+        subject=subject, sender_address=sender_address, body=body, list_unsubscribe=list_unsubscribe
+    )
+    if prefilter_reason is not None:
+        logger.info(
+            "claude_call_skipped call=classify_email model=%s reason=%s",
+            settings.anthropic_classification_model,
+            prefilter_reason,
+        )
+        return ClassificationResult(
+            wichtigkeits_kategorie=WichtigkeitsKategorie.NEWSLETTER,
+            typ=TypKategorie.KEINER,
+            confidence=0.97,
+            reasoning=prefilter_reason,
+        )
+
     client = client or get_anthropic_client()
     user_message = _build_user_message(subject=subject, sender_address=sender_address, body=body)
 

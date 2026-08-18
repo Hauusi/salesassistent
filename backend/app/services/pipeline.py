@@ -99,7 +99,10 @@ async def process_incoming_email(
     )
 
     classification_result = await classification.classify_email(
-        subject=fetched.subject, sender_address=fetched.sender_address, body=fetched.raw_content
+        subject=fetched.subject,
+        sender_address=fetched.sender_address,
+        body=fetched.raw_content,
+        list_unsubscribe=fetched.list_unsubscribe,
     )
 
     embedding_text = f"{fetched.subject or ''}\n\n{fetched.raw_content}"

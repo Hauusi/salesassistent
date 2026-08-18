@@ -36,8 +36,11 @@ def _client_for(expected: dict) -> FakeAnthropicClient:
 
 
 @pytest.mark.parametrize(
+    # NEWSLETTER_MAIL is deliberately excluded here: its sender/body match
+    # the rule-based prefilter (tests/test_newsletter_prefilter.py), so it
+    # never reaches the LLM-mapping code path this test exercises.
     "fixture",
-    [ANFRAGE_MAIL, BESTELLUNG_MAIL, INFORMATION_MAIL, NEWSLETTER_MAIL, SPAM_MAIL],
+    [ANFRAGE_MAIL, BESTELLUNG_MAIL, INFORMATION_MAIL, SPAM_MAIL],
     ids=lambda f: f["expected"]["wichtigkeits_kategorie"],
 )
 async def test_classify_email_maps_llm_output_to_result(fixture: dict) -> None:
@@ -150,6 +153,66 @@ async def test_classify_email_strips_quoted_thread_from_prompt() -> None:
 
     user_content = client.messages.calls[0]["messages"][0]["content"]
     assert "alter, fuer die Klassifikation irrelevanter" not in user_content
+
+
+async def test_classify_email_skips_llm_call_for_unambiguous_newsletter() -> None:
+    """NEWSLETTER_MAIL's sender ("newsletter@...") + body ("Abmelden ...")
+    match the rule-based prefilter (app.services.newsletter_prefilter), so
+    this must resolve to 'newsletter' without ever touching the (fake)
+    Anthropic client - see tests/test_newsletter_prefilter.py for
+    unit-level coverage of the prefilter rules themselves."""
+
+    def _respond(_kwargs: dict):
+        raise AssertionError("classify_email must not call the LLM for an unambiguous newsletter")
+
+    client = FakeAnthropicClient(_respond)
+
+    result = await classify_email(
+        subject=NEWSLETTER_MAIL["subject"],
+        sender_address=NEWSLETTER_MAIL["sender_address"],
+        body=NEWSLETTER_MAIL["body"],
+        list_unsubscribe=None,
+        client=client,
+    )
+
+    assert result.wichtigkeits_kategorie == WichtigkeitsKategorie.NEWSLETTER
+    assert result.typ == TypKategorie.KEINER
+    assert len(client.messages.calls) == 0
+
+
+async def test_classify_email_with_list_unsubscribe_header_skips_llm_call() -> None:
+    def _respond(_kwargs: dict):
+        raise AssertionError("classify_email must not call the LLM when List-Unsubscribe is present")
+
+    client = FakeAnthropicClient(_respond)
+
+    result = await classify_email(
+        subject="Ihr wöchentlicher Trend-Report",
+        sender_address="reports@some-vendor.example",
+        body="Hier sind Ihre wöchentlichen Branchen-Trends.",
+        list_unsubscribe="<mailto:unsubscribe@some-vendor.example>",
+        client=client,
+    )
+
+    assert result.wichtigkeits_kategorie == WichtigkeitsKategorie.NEWSLETTER
+    assert len(client.messages.calls) == 0
+
+
+async def test_classify_email_still_calls_llm_for_ambiguous_mail() -> None:
+    """ANFRAGE_MAIL has no List-Unsubscribe header and doesn't match the
+    bulk-sender/boilerplate combo, so it must still go through the normal
+    Claude call - the prefilter must never swallow a genuine inquiry."""
+    client = _client_for(ANFRAGE_MAIL["expected"])
+
+    await classify_email(
+        subject=ANFRAGE_MAIL["subject"],
+        sender_address=ANFRAGE_MAIL["sender_address"],
+        body=ANFRAGE_MAIL["body"],
+        list_unsubscribe=None,
+        client=client,
+    )
+
+    assert len(client.messages.calls) == 1
 
 
 async def test_classify_email_raises_clear_error_without_tool_use() -> None:

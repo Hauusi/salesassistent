@@ -118,6 +118,12 @@ class FetchedEmail:
     raw_content: str
     snippet: str | None
     received_at: datetime
+    # RFC 2369/8058 header, set by essentially every bulk-mail sender
+    # (Mailchimp, HubSpot, Sendinblue, ...) and essentially never by a
+    # human composing a genuine business mail in a normal client - see
+    # app/services/newsletter_prefilter.py for how this skips the Claude
+    # classification call on unambiguous newsletters.
+    list_unsubscribe: str | None = None
     attachments: list[FetchedAttachment] = field(default_factory=list)
 
 
@@ -205,6 +211,7 @@ def parse_gmail_message(raw: dict) -> FetchedEmail:
         raw_content=_extract_plain_text(payload),
         snippet=raw.get("snippet"),
         received_at=received_at,
+        list_unsubscribe=_header(headers, "List-Unsubscribe"),
         attachments=_extract_attachments(payload),
     )
 
