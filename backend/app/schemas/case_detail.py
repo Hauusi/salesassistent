@@ -9,14 +9,19 @@ from app.schemas.email import EmailOut
 
 
 class CaseListItemOut(ORMBase):
+    # No defaults on these: the route always populates them, so declaring
+    # them required is the accurate contract. A default would render them
+    # as optional in the OpenAPI document, which propagates into the
+    # generated frontend types as `T[] | undefined` and forces every call
+    # site to guard against a case that cannot occur.
     id: uuid.UUID
     title: str
     summary: str | None
     status: CaseStatus
     created_at: datetime
-    contacts: list[ContactOut] = []
-    email_count: int = 0
+    contacts: list[ContactOut]
+    email_count: int
 
 
 class CaseDetailOut(CaseListItemOut):
-    emails: list[EmailOut] = []
+    emails: list[EmailOut]

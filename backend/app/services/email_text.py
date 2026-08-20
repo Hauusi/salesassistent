@@ -16,7 +16,10 @@ import re
 
 _QUOTE_MARKERS: list[re.Pattern[str]] = [
     # Outlook-style separator: "---- Ursprüngliche Nachricht ----" / "-----Original Message-----"
-    re.compile(r"^-{2,}\s*(Ursprüngliche Nachricht|Original Message)\s*-{2,}.*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(
+        r"^-{2,}\s*(Ursprüngliche Nachricht|Original Message)\s*-{2,}.*$",
+        re.MULTILINE | re.IGNORECASE,
+    ),
     # Gmail-style reply header: "Am 12.03.2024 um 10:15 schrieb Max Mustermann <max@example.com>:"
     re.compile(r"^Am\s.{1,80}\sschrieb\s.{1,160}:\s*$", re.MULTILINE),
     # English equivalent: "On Tue, 12 Mar 2024 at 10:15, Max Mustermann <max@example.com> wrote:"

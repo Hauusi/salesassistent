@@ -14,14 +14,14 @@ import base64
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.message import EmailMessage as PyEmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from html import unescape
 
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from google.auth.transport.requests import Request as GoogleAuthRequest
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -78,7 +78,7 @@ def encrypted_fields_from_credentials(creds: Credentials) -> dict:
     return {
         "access_token_encrypted": crypto.encrypt(creds.token) if creds.token else None,
         "refresh_token_encrypted": crypto.encrypt(creds.refresh_token) if creds.refresh_token else None,
-        "token_expiry": creds.expiry.replace(tzinfo=timezone.utc) if creds.expiry else None,
+        "token_expiry": creds.expiry.replace(tzinfo=UTC) if creds.expiry else None,
         "granted_scopes": " ".join(creds.scopes) if creds.scopes else None,
     }
 
@@ -265,15 +265,15 @@ def parse_gmail_message(raw: dict) -> FetchedEmail:
     try:
         received_at = parsedate_to_datetime(date_header) if date_header else None
         if received_at and received_at.tzinfo is None:
-            received_at = received_at.replace(tzinfo=timezone.utc)
+            received_at = received_at.replace(tzinfo=UTC)
     except (TypeError, ValueError):
         received_at = None
     if received_at is None:
         internal_ms = raw.get("internalDate")
         received_at = (
-            datetime.fromtimestamp(int(internal_ms) / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(int(internal_ms) / 1000, tz=UTC)
             if internal_ms
-            else datetime.now(timezone.utc)
+            else datetime.now(UTC)
         )
 
     return FetchedEmail(

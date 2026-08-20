@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
+from app.models.enums import ActionActor
 from app.models.mailbox import Mailbox
 from app.services import gmail_client
 from app.services.action_log_service import log_action
-from app.models.enums import ActionActor
 from app.services.tenant_bootstrap import get_or_create_default_tenant, get_or_create_user
 
 logger = logging.getLogger(__name__)

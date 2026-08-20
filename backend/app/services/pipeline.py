@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,6 +158,10 @@ def _build_email(
         status=_STATUS_BY_WICHTIGKEIT[result.wichtigkeits_kategorie],
         embedding=embedding,
         received_at=fetched.received_at,
+        # When *we* handled it, as opposed to when it was sent. Needed to
+        # tell "old mail, just imported" from "arrived and sat unprocessed",
+        # which the audit trail alone cannot answer.
+        processed_at=datetime.now(UTC),
     )
 
 

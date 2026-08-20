@@ -204,11 +204,16 @@ def coerce_enum(raw: Any, enum_cls: type[E], default: E, *, field: str, call: st
         return default
 
 
-def coerce_float(raw: Any, default: float, *, minimum: float, maximum: float, field: str, call: str) -> float:
+def coerce_float(
+    raw: Any, default: float, *, minimum: float, maximum: float, field: str, call: str
+) -> float:
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        logger.warning("llm_response_coerced call=%s field=%s value=%r fallback=%s", call, field, raw, default)
+        logger.warning(
+            "llm_response_coerced call=%s field=%s value=%r fallback=%s",
+            call, field, raw, default,
+        )
         return default
     return min(max(value, minimum), maximum)
 

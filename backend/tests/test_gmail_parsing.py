@@ -8,7 +8,7 @@ app/workers/tasks.py), plus the ones that quietly corrupted data.
 from __future__ import annotations
 
 import base64
-from datetime import timezone
+from datetime import UTC
 
 from app.services.gmail_client import parse_gmail_message
 
@@ -67,7 +67,7 @@ def test_unparsable_sender_gets_a_per_message_placeholder() -> None:
 def test_missing_date_header_falls_back_to_internal_date() -> None:
     raw = _message(headers=[{"name": "From", "value": "a@b.de"}], internalDate="1755000000000")
     fetched = parse_gmail_message(raw)
-    assert fetched.received_at.tzinfo == timezone.utc
+    assert fetched.received_at.tzinfo == UTC
 
 
 def test_unparsable_date_header_does_not_raise() -> None:

@@ -10,7 +10,7 @@ exactly once", never "sent twice" - see the two-phase claim there.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -89,7 +89,10 @@ async def update_draft(
 ) -> Draft:
     draft = await _get_draft_or_404(db, tenant, draft_id)
     if draft.status != DraftStatus.ENTWURF:
-        raise HTTPException(status_code=409, detail="Nur Entwürfe im Status 'entwurf' können bearbeitet werden.")
+        raise HTTPException(
+            status_code=409,
+            detail="Nur Entwürfe im Status 'entwurf' können bearbeitet werden.",
+        )
 
     draft.subject = payload.subject
     draft.body = payload.body
@@ -159,7 +162,7 @@ async def approve_draft(
     # Phase 1: claim.
     draft.status = DraftStatus.FREIGEGEBEN
     draft.approved_by_user_id = user.id
-    draft.approved_at = datetime.now(timezone.utc)
+    draft.approved_at = datetime.now(UTC)
     await log_action(
         db,
         tenant_id=tenant.id,
@@ -207,7 +210,7 @@ async def approve_draft(
         await db.commit()
         raise HTTPException(status_code=502, detail=f"Versand fehlgeschlagen: {exc}") from exc
 
-    draft.sent_at = datetime.now(timezone.utc)
+    draft.sent_at = datetime.now(UTC)
     draft.gmail_sent_message_id = sent_message_id
     draft.status = DraftStatus.VERSENDET
     email.status = EmailStatus.ERLEDIGT
@@ -240,7 +243,10 @@ async def reject_draft(
 ) -> Draft:
     draft = await _get_draft_or_404(db, tenant, draft_id)
     if draft.status != DraftStatus.ENTWURF:
-        raise HTTPException(status_code=409, detail="Nur Entwürfe im Status 'entwurf' können abgelehnt werden.")
+        raise HTTPException(
+            status_code=409,
+            detail="Nur Entwürfe im Status 'entwurf' können abgelehnt werden.",
+        )
 
     draft.status = DraftStatus.ABGELEHNT
     draft.rejected_reason = payload.reason

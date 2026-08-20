@@ -986,21 +986,18 @@
               "$ref": "#/components/schemas/ContactOut"
             },
             "type": "array",
-            "title": "Contacts",
-            "default": []
+            "title": "Contacts"
           },
           "email_count": {
             "type": "integer",
-            "title": "Email Count",
-            "default": 0
+            "title": "Email Count"
           },
           "emails": {
             "items": {
               "$ref": "#/components/schemas/EmailOut"
             },
             "type": "array",
-            "title": "Emails",
-            "default": []
+            "title": "Emails"
           }
         },
         "type": "object",
@@ -1009,7 +1006,10 @@
           "title",
           "summary",
           "status",
-          "created_at"
+          "created_at",
+          "contacts",
+          "email_count",
+          "emails"
         ],
         "title": "CaseDetailOut"
       },
@@ -1048,13 +1048,11 @@
               "$ref": "#/components/schemas/ContactOut"
             },
             "type": "array",
-            "title": "Contacts",
-            "default": []
+            "title": "Contacts"
           },
           "email_count": {
             "type": "integer",
-            "title": "Email Count",
-            "default": 0
+            "title": "Email Count"
           }
         },
         "type": "object",
@@ -1063,7 +1061,9 @@
           "title",
           "summary",
           "status",
-          "created_at"
+          "created_at",
+          "contacts",
+          "email_count"
         ],
         "title": "CaseListItemOut"
       },

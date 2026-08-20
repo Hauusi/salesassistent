@@ -1,0 +1,120 @@
+name: CI
+
+# ruff and the test suite were both already dependencies, but nothing ran
+# them - which is why three over-long lines and a handful of unused imports
+# sat in the tree, and why the API layer had no test coverage at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # pgvector is required: EmailMessage.embedding is a vector column,
+        # so the schema cannot even be created without the extension.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: salesassistent_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/salesassistent_test
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check app tests scripts
+
+      - name: Migrations apply from scratch
+        # Catches a migration that only works against an already-migrated
+        # database - the test suite builds its schema with create_all and
+        # would not notice.
+        run: alembic upgrade head
+        env:
+          TOKEN_ENCRYPTION_KEY: -Fh2wq9s0V1z7QpM3Yv8Jk6XoN4Rr5Td2Ac1Bw0EeGs=
+
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  api-types-in-sync:
+    # The generated types are committed so a build needs no running
+    # backend. That only holds if they are actually regenerated when a
+    # schema changes, which this job enforces.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: pip install -r backend/requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run generate:api-types
+        working-directory: frontend
+      - name: Fail if the generated types are stale
+        run: |
+          if ! git diff --quiet -- frontend/lib/openapi.json frontend/lib/api-schema.ts; then
+            echo "::error::Die generierten API-Typen sind nicht aktuell."
+            echo "Bitte 'npm run generate:api-types' im frontend/ ausführen und committen."
+            git diff -- frontend/lib/openapi.json frontend/lib/api-schema.ts
+            exit 1
+          fi

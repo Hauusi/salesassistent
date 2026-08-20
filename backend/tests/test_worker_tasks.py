@@ -7,7 +7,7 @@ be processed must cost that message, never the mailbox.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -36,7 +36,7 @@ async def mailbox(db_session: AsyncSession) -> Mailbox:
         tenant_id=tenant.id,
         user_id=user.id,
         email_address="me@example.com",
-        last_synced_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        last_synced_at=datetime.now(UTC) - timedelta(hours=1),
     )
     db_session.add(mailbox)
     # Commit rather than flush: _process_one_message rolls back on failure,
@@ -56,7 +56,7 @@ def _fetched(message_id: str) -> FetchedEmail:
         sender_name="Kunde",
         raw_content="Guten Tag, eine Frage.",
         snippet="Guten Tag",
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
 
 

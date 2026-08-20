@@ -116,7 +116,8 @@ async def import_products(
     # perfectly good files while adding nothing - import_products_csv
     # validates the header row itself and reports per-row errors. So this
     # only rejects types that are certainly not text.
-    if file.content_type and file.content_type.startswith(("image/", "video/", "audio/")):
+    unsupported = ("image/", "video/", "audio/")
+    if file.content_type and file.content_type.startswith(unsupported):
         raise HTTPException(status_code=400, detail=f"Unerwarteter Dateityp: {file.content_type}")
 
     raw = await file.read()
@@ -125,7 +126,9 @@ async def import_products(
     try:
         csv_text = raw.decode("utf-8-sig")  # tolerate Excel's BOM-prefixed UTF-8 exports
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="CSV-Datei konnte nicht als UTF-8 gelesen werden.") from exc
+        raise HTTPException(
+            status_code=400, detail="CSV-Datei konnte nicht als UTF-8 gelesen werden."
+        ) from exc
 
     result = await import_products_csv(db, tenant_id=tenant.id, csv_text=csv_text)
     await db.commit()

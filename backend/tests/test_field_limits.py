@@ -7,7 +7,7 @@ StringDataRightTruncation from Postgres and abort the whole poll batch.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -83,7 +83,7 @@ async def test_oversized_headers_are_persisted_instead_of_aborting_the_batch(
         sender_name="N" * 4000,
         raw_content="Kurzer Text.",
         snippet="S" * 4000,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
 
     email = await pipeline.process_incoming_email(db_session, mailbox=mailbox, fetched=fetched)
@@ -117,7 +117,7 @@ async def test_an_oversized_suggested_case_title_is_fitted(
         sender_name="Kunde",
         raw_content="Text",
         snippet=None,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
     email = await pipeline.process_incoming_email(db_session, mailbox=mailbox, fetched=fetched)
 
@@ -140,7 +140,7 @@ async def test_an_oversized_sender_name_is_fitted_on_the_contact_too(
         sender_name="N" * 4000,
         raw_content="Text",
         snippet=None,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
     await pipeline.process_incoming_email(db_session, mailbox=mailbox, fetched=fetched)
 

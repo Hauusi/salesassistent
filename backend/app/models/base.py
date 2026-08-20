@@ -3,8 +3,9 @@
 Every tenant-scoped table includes ``tenant_id`` directly (denormalized,
 not only reachable via joins) so that row-level filtering by tenant is a
 simple, impossible-to-forget ``WHERE tenant_id = :tenant_id`` on the table
-itself. See ``app/services/tenant_scope.py`` for the query helper that
-enforces this consistently.
+itself. Every query that reads a tenant-owned table is expected to carry
+that predicate; there is no helper enforcing it, so it is a convention the
+API layer applies by hand.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, declared_attr
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 
 class UUIDPKMixin:
@@ -35,7 +36,7 @@ class TenantScopedMixin:
     """Adds a mandatory, indexed tenant_id FK. Apply to every tenant-owned table."""
 
     @declared_attr
-    def tenant_id(cls) -> Mapped[uuid.UUID]:  # noqa: N805
+    def tenant_id(cls) -> Mapped[uuid.UUID]:
         return mapped_column(
             UUID(as_uuid=True),
             ForeignKey("tenants.id", ondelete="CASCADE"),

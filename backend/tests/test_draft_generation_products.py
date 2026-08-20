@@ -5,7 +5,7 @@ out otherwise - the actual LLM call is mocked (tests/mocks.py).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +44,7 @@ async def _make_email(db_session: AsyncSession, mailbox: Mailbox, *, typ: TypKat
         raw_content=content,
         typ=typ,
         wichtigkeits_kategorie=WichtigkeitsKategorie.ANTWORT_ERFORDERLICH,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
     db_session.add(email)
     await db_session.flush()

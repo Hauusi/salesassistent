@@ -77,7 +77,11 @@ def _or_tsquery(query_text: str):
     """
     lexemes = (
         select(func.string_agg(column("lexeme"), literal(" | ")))
-        .select_from(func.unnest(func.to_tsvector(_text_config(), cast(literal(query_text), Text))).alias("lex"))
+        .select_from(
+            func.unnest(
+                func.to_tsvector(_text_config(), cast(literal(query_text), Text))
+            ).alias("lex")
+        )
         .scalar_subquery()
     )
     return cast(func.nullif(lexemes, ""), TSQUERY)

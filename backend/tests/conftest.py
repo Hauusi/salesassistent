@@ -28,8 +28,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db import Base, engine
 import app.models  # noqa: F401 - registers all models on Base.metadata
+from app.db import Base, engine
 
 
 @pytest_asyncio.fixture
@@ -94,7 +94,6 @@ async def api_client(db_session: AsyncSession):
     """
     import httpx
 
-    from app.api import deps
     from app.db import get_db
     from app.main import app
 
@@ -111,9 +110,9 @@ async def api_client(db_session: AsyncSession):
 @pytest_asyncio.fixture
 async def tenant(db_session: AsyncSession):
     """The default tenant the API's deps resolve to, plus its user."""
+    from app.config import get_settings
     from app.models.tenant import Tenant
     from app.models.user import User
-    from app.config import get_settings
 
     tenant = Tenant(name="Test", slug=get_settings().default_tenant_slug)
     db_session.add(tenant)

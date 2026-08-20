@@ -5,7 +5,7 @@ embedding calls mocked out (tests/mocks.py + unittest.mock).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -49,7 +49,7 @@ def _fetched_from_fixture(fixture: dict) -> FetchedEmail:
         sender_name=fixture["sender_name"],
         raw_content=fixture["body"],
         snippet=fixture["body"][:100],
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
 
 

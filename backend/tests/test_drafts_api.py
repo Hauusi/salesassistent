@@ -7,7 +7,7 @@ never "sent twice".
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -51,7 +51,7 @@ async def draft(db_session: AsyncSession, tenant: Tenant) -> Draft:
         wichtigkeits_kategorie=WichtigkeitsKategorie.ANTWORT_ERFORDERLICH,
         typ=TypKategorie.ANFRAGE,
         status=EmailStatus.WARTET_AUF_FREIGABE,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
     )
     db_session.add(email)
     await db_session.flush()

@@ -24,7 +24,9 @@ async def get_current_tenant(db: AsyncSession = Depends(get_db)) -> Tenant:
 async def get_current_user(
     db: AsyncSession = Depends(get_db), tenant: Tenant = Depends(get_current_tenant)
 ) -> User:
-    result = await db.execute(select(User).where(User.tenant_id == tenant.id).order_by(User.created_at).limit(1))
+    result = await db.execute(
+        select(User).where(User.tenant_id == tenant.id).order_by(User.created_at).limit(1)
+    )
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(

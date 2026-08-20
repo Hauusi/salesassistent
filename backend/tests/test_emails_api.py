@@ -7,7 +7,7 @@ whole categories unreachable in the UI.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +26,7 @@ async def inbox(db_session: AsyncSession, tenant: Tenant) -> Mailbox:
     db_session.add(mailbox)
     await db_session.flush()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = [
         ("Anfrage", WichtigkeitsKategorie.ANTWORT_ERFORDERLICH, TypKategorie.ANFRAGE, EmailStatus.WARTET_AUF_FREIGABE),
         ("Infomail", WichtigkeitsKategorie.INFORMATION, TypKategorie.KEINER, EmailStatus.ABGELEGT),

@@ -222,9 +222,39 @@ nachinstallieren). Anthropic-Aufrufe sind durchgängig gemockt
   werden beim Verarbeiten in `attachments` gespeichert; der Anhang-Inhalt
   selbst wird noch nicht in einem Objektspeicher abgelegt
   (`Attachment.storage_path` ist dafür vorbereitet).
+- **Vorbereitete, aber noch nicht befüllte Felder**: `Case.summary` (eine
+  Case-Zusammenfassung würde einen weiteren LLM-Aufruf bedeuten) und
+  `CaseStatus.GESCHLOSSEN` (es gibt noch keinen Endpunkt, der einen Case
+  schließt). Beide sind im Datenmodell und in der API vorhanden, damit sie
+  ohne Schema- und Vertragsänderung nachgezogen werden können.
+- **Volltextsuche-Sprache**: `PRODUCT_SEARCH_TEXT_CONFIG` (Default
+  `german`) gilt deploymentweit, nicht pro Mandant. Der GIN-Index in
+  `alembic/versions/a1b2c3d4e5f6_*` ist für diesen Wert gebaut; eine
+  andere Konfiguration funktioniert weiterhin, fällt aber auf einen
+  sequentiellen Scan zurück, bis ein passender Index angelegt wird.
 - **Nicht gebaut (laut Auftrag bewusst out of scope)**: automatischer
   Versand ohne Freigabe, automatisches Löschen, Outlook/IMAP, vollautomatische
   Angebotserstellung, Follow-up-Reminder/Digest, Mehrsprachigkeits-Logik.
+
+## Qualitätssicherung
+
+```bash
+cd backend
+ruff check app tests scripts     # Linting
+pytest -q                        # Testsuite (braucht Postgres+pgvector, siehe unten)
+
+cd ../frontend
+npm run typecheck                # tsc --noEmit
+npm run lint
+npm run generate:api-types       # TS-Typen aus dem OpenAPI-Dokument des Backends
+```
+
+Beides läuft in CI (`.github/workflows/ci.yml`), inklusive eines Jobs, der
+fehlschlägt, wenn die committeten API-Typen nicht mehr zum Backend passen.
+
+Die TypeScript-Typen in `frontend/lib/api-schema.ts` sind **generiert** —
+nicht von Hand bearbeiten. Nach einer Änderung an einem Response-Schema
+`npm run generate:api-types` ausführen und das Ergebnis mitcommitten.
 
 ## Sicherheit
 

@@ -37,7 +37,10 @@ async def import_products_csv(
 ) -> ProductImportResult:
     reader = csv.DictReader(io.StringIO(csv_text))
     if reader.fieldnames is None:
-        return ProductImportResult(created=0, updated=0, skipped=0, errors=["CSV ist leer oder hat keine Kopfzeile."])
+        return ProductImportResult(
+            created=0, updated=0, skipped=0,
+            errors=["CSV ist leer oder hat keine Kopfzeile."],
+        )
 
     header = {(h or "").strip().lower() for h in reader.fieldnames}
     missing = REQUIRED_COLUMNS - header

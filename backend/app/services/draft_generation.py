@@ -141,9 +141,10 @@ async def generate_draft(
             query_text=f"{email.subject or ''}\n{email.raw_content}",
         )
         if matched_products:
+            rendered = format_products_for_prompt(matched_products)
             product_context_block = (
                 "\n\n---\n\nPassende Produkte aus der Produkt-Wissensbasis "
-                f"(nutze diese konkreten Werte in der Antwort):\n{format_products_for_prompt(matched_products)}"
+                f"(nutze diese konkreten Werte in der Antwort):\n{rendered}"
             )
 
     # Strip the quoted thread from the new mail too - it's already covered
@@ -198,7 +199,8 @@ async def generate_draft(
     # take down the whole poll batch. An empty body is caught by the caller
     # (see app/services/pipeline.py), which skips draft creation rather than
     # storing a blank draft for a human to puzzle over.
-    subject = coerce_str(data.get("subject"), max_chars=998) or f"Re: {email.subject or ''}"[:998]
+    fallback_subject = f"Re: {email.subject or ''}"[:998]
+    subject = coerce_str(data.get("subject"), max_chars=998) or fallback_subject
     body = coerce_str(data.get("body"))
 
     return subject, body, rag_summary

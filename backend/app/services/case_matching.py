@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,7 +55,9 @@ async def _best_match(
             EmailMessage.received_at >= cutoff,
         )
         .order_by(distance_expr)
-        .limit(5)
+        # Only the nearest row is ever read (see .first() below); the index
+        # scan can stop there.
+        .limit(1)
     )
     if contact_id is not None:
         stmt = stmt.where(EmailMessage.contact_id == contact_id)
@@ -76,7 +78,7 @@ async def find_matching_case(
     embedding: list[float],
 ) -> CaseMatch | None:
     settings = get_settings()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.case_lookback_days)
+    cutoff = datetime.now(UTC) - timedelta(days=settings.case_lookback_days)
 
     # Stage 1: same-contact history.
     case_id, similarity = await _best_match(

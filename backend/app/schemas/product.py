@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.common import FreeFormDict, ORMBase

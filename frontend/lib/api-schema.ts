@@ -347,20 +347,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /**
-             * Contacts
-             * @default []
-             */
+            /** Contacts */
             contacts: components["schemas"]["ContactOut"][];
-            /**
-             * Email Count
-             * @default 0
-             */
+            /** Email Count */
             email_count: number;
-            /**
-             * Emails
-             * @default []
-             */
+            /** Emails */
             emails: components["schemas"]["EmailOut"][];
         };
         /** CaseListItemOut */
@@ -380,15 +371,9 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /**
-             * Contacts
-             * @default []
-             */
+            /** Contacts */
             contacts: components["schemas"]["ContactOut"][];
-            /**
-             * Email Count
-             * @default 0
-             */
+            /** Email Count */
             email_count: number;
         };
         /** CaseOut */

@@ -18,4 +18,4 @@ class Tenant(UUIDPKMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
 
-    users: Mapped[list["User"]] = relationship(back_populates="tenant", cascade="all, delete-orphan")
+    users: Mapped[list[User]] = relationship(back_populates="tenant", cascade="all, delete-orphan")

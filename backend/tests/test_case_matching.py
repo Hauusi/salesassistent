@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,7 +69,7 @@ async def _add_cased_email(
         raw_content="Testinhalt",
         wichtigkeits_kategorie=None,
         embedding=make_embedding(angle),
-        received_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+        received_at=datetime.now(UTC) - timedelta(days=days_ago),
     )
     db_session.add(email)
     await db_session.flush()

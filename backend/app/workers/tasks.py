@@ -12,7 +12,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,7 +63,7 @@ async def _process_one_message(
         else:
             result.processed += 1
         await db.commit()
-    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+    except Exception as exc:
         result.failed += 1
         logger.exception(
             "mail_processing_failed mailbox=%s gmail_message_id=%s", mailbox.id, message_id
@@ -95,7 +95,7 @@ async def _log_failure(
             },
         )
         await db.commit()
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("failure_audit_write_failed mailbox=%s", mailbox.id)
         await db.rollback()
 
@@ -135,7 +135,7 @@ async def _poll_mailbox_async(mailbox_id: str) -> PollResult:
         # Always advance the watermark, including past messages that failed.
         # Those are recorded in the audit trail; leaving the watermark back
         # would retry them forever and block everything behind them.
-        mailbox.last_synced_at = datetime.now(timezone.utc)
+        mailbox.last_synced_at = datetime.now(UTC)
         await db.commit()
 
     logger.info("mailbox_poll_finished mailbox=%s %s", mailbox_id, result)
