@@ -84,6 +84,44 @@ class Settings(BaseSettings):
     # not older than this, to avoid tying a mail to a long-dead thread.
     case_lookback_days: int = 180
 
+    # --- Newsletter pre-filter (app/services/newsletter_prefilter.py) ---
+    # Vocabulary-based signals, overridable per deployment because a
+    # hardcoded list silently limits the system to the language it was
+    # written in. Comma-separated in the environment.
+    #
+    # Local-parts used essentially only by bulk-send systems/ESPs, never by
+    # a human composing a genuine business mail. Deliberately excludes
+    # no-reply/noreply/donotreply: those are just as common for
+    # transactional mail (order confirmations, shipping notices) that must
+    # NOT be swept into 'newsletter'.
+    newsletter_bulk_local_parts: str = (
+        "newsletter,newsletters,newsletter-noreply,marketing,mailer,mailing,campaign,"
+        "campaigns,bulkmail,bulk,news,nl,mailings,broadcast"
+    )
+    # Footer boilerplate found in essentially every marketing send. Used
+    # only as a secondary signal, never on its own.
+    newsletter_boilerplate_terms: str = (
+        "abmelden,abbestellen,newsletter abbestellen,vom newsletter,unsubscribe,"
+        "opt out,opt-out,manage preferences,email preferences,im browser ansehen,"
+        "im browser anzeigen,view in browser,view this email,sie erhalten diese e-mail,"
+        "sie erhalten diese email,sie erhalten diese nachricht,you are receiving this"
+    )
+    # The safety guard: anything matching means a human may need to act, so
+    # the mail is never auto-filed as newsletter regardless of bulk signals.
+    # Covers genuine business vocabulary and phishing/urgency patterns, in
+    # German and English - a language gap here means a real inquiry gets
+    # quietly filed away, which is the expensive direction of the trade.
+    newsletter_human_review_terms: str = (
+        "anfrage,angebot,angebotsanfrage,bestellung,bestellen,auftrag,rechnung,"
+        "lieferzeit,liefertermin,reklamation,storno,stornierung,kündigung,kuendigung,"
+        "mahnung,dringend,eilt,frist,"
+        "inquiry,enquiry,quotation,quote,purchase order,order confirmation,invoice,"
+        "delivery date,lead time,complaint,cancellation,urgent,asap,deadline,"
+        "passwort,password,kennwort,login,anmeldedaten,credentials,verify your,"
+        "verify account,konto gesperrt,account suspended,kreditkarte,credit card,"
+        "zahlungsdaten,payment details"
+    )
+
     # --- Product search ---
     # Postgres text-search configuration used to stem and stop-word both
     # the catalog text and the inquiry (see app/services/product_search.py).
@@ -93,6 +131,30 @@ class Settings(BaseSettings):
 
     # --- Single-tenant MVP bootstrap ---
     default_tenant_slug: str = "default"
+
+
+    # --- Derived views on the comma-separated settings above -------------
+    #
+    # Parsed once per Settings instance (which is itself cached), so callers
+    # get a ready-made set/list instead of re-splitting a string on every
+    # mail.
+
+    @property
+    def newsletter_bulk_local_parts_set(self) -> frozenset[str]:
+        return frozenset(_split_terms(self.newsletter_bulk_local_parts))
+
+    @property
+    def newsletter_boilerplate_terms_list(self) -> list[str]:
+        return _split_terms(self.newsletter_boilerplate_terms)
+
+    @property
+    def newsletter_human_review_terms_list(self) -> list[str]:
+        return _split_terms(self.newsletter_human_review_terms)
+
+
+def _split_terms(raw: str) -> list[str]:
+    """Splits a comma-separated setting into normalised terms."""
+    return [term.strip().lower() for term in raw.split(",") if term.strip()]
 
 
 @lru_cache

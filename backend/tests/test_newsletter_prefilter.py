@@ -89,3 +89,131 @@ def test_bestellung_and_information_mails_are_not_filtered() -> None:
             list_unsubscribe=None,
         )
         assert reason is None, f"{fixture['subject']!r} must not be auto-filtered as newsletter"
+
+
+# --- language coverage --------------------------------------------------
+#
+# The vocabulary lists used to be hardcoded German (plus six English
+# local-parts). The "needs human review" list in particular is a safety
+# guard: a language gap there means a genuine inquiry gets quietly filed
+# away as a newsletter, which is the expensive direction of the trade.
+
+
+def test_an_english_inquiry_with_a_list_unsubscribe_header_is_not_filtered() -> None:
+    """Regression: some CRM and helpdesk systems set List-Unsubscribe on
+    genuine person-to-person mail. The German-only guard did not fire for
+    an English request, so it was auto-filed as a newsletter."""
+    assert (
+        prefilter_newsletter_reason(
+            subject="Request for quotation",
+            sender_address="procurement@customer.com",
+            body="Hello, could you send us a quotation for 200 units?",
+            list_unsubscribe="<https://crm.example.com/unsubscribe>",
+        )
+        is None
+    )
+
+
+def test_an_english_purchase_order_is_not_filtered() -> None:
+    assert (
+        prefilter_newsletter_reason(
+            subject="Purchase order 4711",
+            sender_address="newsletter@customer.com",
+            body="Please find our purchase order attached. Unsubscribe here.",
+            list_unsubscribe=None,
+        )
+        is None
+    )
+
+
+def test_an_english_phishing_attempt_is_not_downgraded_to_newsletter() -> None:
+    assert (
+        prefilter_newsletter_reason(
+            subject="Verify your account now",
+            sender_address="marketing@phish.example",
+            body="Your account suspended. Verify your credentials to unsubscribe.",
+            list_unsubscribe="<https://phish.example/u>",
+        )
+        is None
+    )
+
+
+def test_additional_bulk_local_parts_are_recognised() -> None:
+    """'nl@' and 'news@' are as common as 'newsletter@' and were missing."""
+    for local_part in ("nl", "news", "mailings", "broadcast"):
+        assert (
+            prefilter_newsletter_reason(
+                subject="Unsere Neuheiten im August",
+                sender_address=f"{local_part}@shop.example",
+                body="Viele neue Artikel im Sortiment. Hier abmelden.",
+                list_unsubscribe=None,
+            )
+            is not None
+        ), f"{local_part}@ wurde nicht als Bulk-Absender erkannt"
+
+
+def test_english_boilerplate_counts_as_a_secondary_signal() -> None:
+    assert (
+        prefilter_newsletter_reason(
+            subject="August highlights",
+            sender_address="marketing@shop.example",
+            body="Lots of new products this month. Manage preferences or opt out.",
+            list_unsubscribe=None,
+        )
+        is not None
+    )
+
+
+def test_terms_are_matched_as_literals_not_as_regex(monkeypatch) -> None:
+    """Configuration comes from an env var; a stray bracket in it must not
+    take down every classification with a regex error."""
+    from app.config import get_settings
+    from app.services import newsletter_prefilter
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "newsletter_human_review_terms", "anfrage,(kaputt", raising=False)
+    newsletter_prefilter._compile_any.cache_clear()
+
+    try:
+        result = prefilter_newsletter_reason(
+            subject="Test",
+            sender_address="newsletter@shop.example",
+            body="Hier abmelden.",
+            list_unsubscribe=None,
+        )
+        assert result is not None
+    finally:
+        newsletter_prefilter._compile_any.cache_clear()
+
+
+def test_an_empty_term_list_disables_that_rule_without_crashing(monkeypatch) -> None:
+    from app.config import get_settings
+    from app.services import newsletter_prefilter
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "newsletter_boilerplate_terms", "", raising=False)
+    newsletter_prefilter._compile_any.cache_clear()
+
+    try:
+        # Without boilerplate the secondary rule can never fire; the
+        # protocol-level header rule still does.
+        assert (
+            prefilter_newsletter_reason(
+                subject="Neuheiten",
+                sender_address="newsletter@shop.example",
+                body="Hier abmelden.",
+                list_unsubscribe=None,
+            )
+            is None
+        )
+        assert (
+            prefilter_newsletter_reason(
+                subject="Neuheiten",
+                sender_address="newsletter@shop.example",
+                body="Hier abmelden.",
+                list_unsubscribe="<https://shop.example/u>",
+            )
+            is not None
+        )
+    finally:
+        newsletter_prefilter._compile_any.cache_clear()
