@@ -31,3 +31,6 @@ npm-debug.log*
 # Next.js build output
 frontend/.next/
 frontend/out/
+
+# Redis dump, created by a local redis-server run
+dump.rdb
