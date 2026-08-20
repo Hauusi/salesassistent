@@ -17,13 +17,21 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/salesassistent_test"
 )
 os.environ.setdefault("TOKEN_ENCRYPTION_KEY", "-Fh2wq9s0V1z7QpM3Yv8Jk6XoN4Rr5Td2Ac1Bw0EeGs=")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
-os.environ.setdefault("VOYAGE_API_KEY", "test-voyage-key")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
 
+# Assigned, not setdefault: Settings also reads backend/.env, so a
+# developer's real key would otherwise reach the test process. A test that
+# slips past its mocks then bills a real account and sends real traffic -
+# which has happened here once, caught only because the key was fake. With
+# a placeholder the worst case is a fast 401.
+os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key-not-a-real-key"
+os.environ["VOYAGE_API_KEY"] = "test-voyage-key-not-a-real-key"
+
+import importlib
 from collections.abc import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -120,3 +128,34 @@ async def tenant(db_session: AsyncSession):
     db_session.add(User(tenant_id=tenant.id, email="user@example.com", name="Test User"))
     await db_session.commit()
     return tenant
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_model_calls(request, monkeypatch):
+    """Fails a test that tries to build a real Anthropic or Voyage client.
+
+    The mocks in this suite are per-test, and one that forgets to patch a
+    boundary would otherwise silently make a live API call - slow, billable
+    and, for a send path, potentially visible to a real customer. This turns
+    a missed mock into an immediate, obvious failure.
+
+    Tests that deliberately construct a client (the llm_client unit tests
+    pass a fake in directly) are unaffected; they never call the factories.
+    """
+    from app.services import llm_client
+
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError(
+            "Ein Test wollte einen echten Model-Client bauen. Boundary mocken "
+            "(siehe tests/test_end_to_end.py) statt live zu telefonieren."
+        )
+
+    monkeypatch.setattr(llm_client, "get_anthropic_client", _refuse)
+    monkeypatch.setattr(llm_client, "get_voyage_client", _refuse)
+    for module_name in ("app.services.classification", "app.services.draft_generation"):
+        module = importlib.import_module(module_name)
+        if hasattr(module, "get_anthropic_client"):
+            monkeypatch.setattr(module, "get_anthropic_client", _refuse)
+    monkeypatch.setattr(
+        importlib.import_module("app.services.embeddings"), "get_voyage_client", _refuse
+    )

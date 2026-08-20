@@ -10,8 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import auth, cases, drafts, emails, knowledge, mailboxes
 from app.config import get_settings
 from app.db import engine
+from app.logging_config import configure_logging
 from app.services import startup_checks
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

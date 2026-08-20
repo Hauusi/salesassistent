@@ -1,13 +1,12 @@
 """RQ worker process entrypoint: `python -m app.workers.run_worker`."""
 from __future__ import annotations
 
-import logging
-
 from rq import Worker
 
+from app.logging_config import configure_logging
 from app.workers.queue import get_queue, get_redis
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 
 
 def main() -> None:

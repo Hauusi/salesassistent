@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     frontend_base_url: str = "http://localhost:3000"
 
+    # --- Logging ---
+    # text is what a human tailing a terminal wants; json for anything
+    # shipping to a log aggregator (see app/logging_config.py - the
+    # structured payloads from token_metrics only survive as JSON).
+    log_level: str = "INFO"
+    log_format: str = "text"
+
     # --- Database ---
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/salesassistent"
 

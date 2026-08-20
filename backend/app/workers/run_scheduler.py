@@ -11,9 +11,10 @@ import logging
 import time
 
 from app.config import get_settings
+from app.logging_config import configure_logging
 from app.workers.tasks import enqueue_poll_for_all_active_mailboxes
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
