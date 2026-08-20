@@ -77,3 +77,14 @@ def test_enqueued_poll_carries_a_retry_policy(clean_queue) -> None:
     per-message failures are absorbed inside the job and never get here."""
     job = queue_module.enqueue_poll(str(uuid.uuid4()))
     assert job.retries_left is not None and job.retries_left > 0
+
+
+def test_the_poll_job_path_resolves() -> None:
+    """The job is enqueued by dotted path to break a queue<->tasks import
+    cycle, which means a rename would only fail inside the worker. Assert
+    it here instead."""
+    import importlib
+
+    module_name, _, function_name = queue_module.POLL_JOB_PATH.rpartition(".")
+    module = importlib.import_module(module_name)
+    assert callable(getattr(module, function_name))

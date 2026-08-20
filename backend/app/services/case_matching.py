@@ -30,8 +30,6 @@ from app.config import get_settings
 from app.models.case import Case
 from app.models.email_message import EmailMessage
 
-settings = get_settings()
-
 
 @dataclass
 class CaseMatch:
@@ -77,6 +75,7 @@ async def find_matching_case(
     contact_id: uuid.UUID | None,
     embedding: list[float],
 ) -> CaseMatch | None:
+    settings = get_settings()
     cutoff = datetime.now(timezone.utc) - timedelta(days=settings.case_lookback_days)
 
     # Stage 1: same-contact history.

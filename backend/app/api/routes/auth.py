@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -23,13 +24,13 @@ from app.models.enums import ActionActor
 from app.services.tenant_bootstrap import get_or_create_default_tenant, get_or_create_user
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.get("/gmail/connect")
 async def gmail_connect() -> RedirectResponse:
+    settings = get_settings()
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(
             status_code=500,
@@ -46,6 +47,7 @@ async def gmail_connect() -> RedirectResponse:
 
 @router.get("/gmail/callback")
 async def gmail_callback(request: Request, db: AsyncSession = Depends(get_db)) -> RedirectResponse:
+    settings = get_settings()
     error = request.query_params.get("error")
     if error:
         return RedirectResponse(f"{settings.frontend_base_url}/connect?error={error}")
@@ -59,8 +61,6 @@ async def gmail_callback(request: Request, db: AsyncSession = Depends(get_db)) -
     creds = flow.credentials
 
     # Identify the mailbox's email address via the userinfo endpoint.
-    import httpx
-
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",

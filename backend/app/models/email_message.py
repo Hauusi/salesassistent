@@ -13,6 +13,10 @@ from app.db import Base
 from app.models.base import TenantScopedMixin, TimestampMixin, UUIDPKMixin
 from app.models.enums import EmailStatus, TypKategorie, WichtigkeitsKategorie
 
+# The second (and last) import-time settings read: a Vector column's width
+# is part of the class definition and cannot be deferred. Because the
+# migration writes a fixed width, the two can drift - which is what
+# app/services/startup_checks.py verifies at boot.
 settings = get_settings()
 
 

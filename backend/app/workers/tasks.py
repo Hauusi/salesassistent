@@ -24,6 +24,7 @@ from app.models.mailbox import Mailbox
 from app.services import gmail_client
 from app.services.action_log_service import log_action
 from app.services.pipeline import process_incoming_email
+from app.workers.queue import enqueue_poll
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,5 @@ def enqueue_poll_for_all_active_mailboxes() -> int:
     """Called by the scheduler on each tick. Enqueues one poll job per
     connected, active mailbox, skipping any mailbox whose previous poll is
     still queued or running."""
-    from app.workers.queue import enqueue_poll
-
     mailbox_ids = asyncio.run(_run_and_dispose(_list_active_mailbox_ids()))
     return sum(1 for mailbox_id in mailbox_ids if enqueue_poll(mailbox_id) is not None)

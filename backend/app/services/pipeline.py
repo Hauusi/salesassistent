@@ -1,17 +1,24 @@
 """End-to-end processing of one fetched mail: contact/case assignment,
 classification, and the per-category action logic from concept doc 5.3.
 
-    newsletter          -> label only, no further action
+    newsletter           -> label only, no further action
     antwort_erforderlich -> generate draft (RAG), status = wartet_auf_freigabe
     information          -> file structured, searchable, status = abgelegt
     bestellung / anfrage -> additionally flagged via `typ` (orthogonal)
     spam_verdacht        -> flagged, hidden from default view, never deleted
 
+The per-category behaviour is expressed as two lookup tables plus one
+branch for the single category that does real work, rather than a chain of
+`elif`s: adding a category should be a table entry, not another arm.
+
 Every step that makes an automated decision is written to ActionLog.
+`process_incoming_email` owns the transaction and is idempotent per
+(mailbox, gmail_message_id).
 """
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.attachment import Attachment
 from app.models.case import Case, CaseContact
 from app.models.contact import Contact
+from app.models.draft import Draft
 from app.models.email_message import EmailMessage
 from app.models.enums import ActionActor, EmailStatus, WichtigkeitsKategorie
 from app.models.limits import fit
@@ -27,7 +35,6 @@ from app.services import case_matching, classification, embeddings
 from app.services.action_log_service import log_action
 from app.services.draft_generation import generate_draft
 from app.services.gmail_client import FetchedEmail
-from app.models.draft import Draft
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +45,34 @@ _STATUS_BY_WICHTIGKEIT = {
     WichtigkeitsKategorie.SPAM_VERDACHT: EmailStatus.AUSGEBLENDET,
 }
 
+# What each category records in the audit trail. antwort_erforderlich is
+# absent on purpose: it logs `draft_generated` against the draft it creates
+# (see _generate_draft_for), which is a different entity, not a different
+# spelling of the same log line.
+_FILING_ACTION_BY_WICHTIGKEIT = {
+    WichtigkeitsKategorie.SPAM_VERDACHT: "hidden_as_spam_verdacht",
+    WichtigkeitsKategorie.INFORMATION: "filed_as_information",
+    WichtigkeitsKategorie.NEWSLETTER: "labeled_newsletter",
+}
 
-async def _get_or_create_contact(db: AsyncSession, *, tenant_id, sender_address: str, sender_name: str | None) -> Contact:
+
+async def _already_processed(db: AsyncSession, *, mailbox: Mailbox, gmail_message_id: str) -> bool:
+    existing = await db.execute(
+        select(EmailMessage.id).where(
+            EmailMessage.mailbox_id == mailbox.id,
+            EmailMessage.gmail_message_id == gmail_message_id,
+        )
+    )
+    return existing.scalar_one_or_none() is not None
+
+
+async def _get_or_create_contact(
+    db: AsyncSession, *, tenant_id: uuid.UUID, sender_address: str, sender_name: str | None
+) -> Contact:
     result = await db.execute(
-        select(Contact).where(Contact.tenant_id == tenant_id, Contact.email_address == sender_address)
+        select(Contact).where(
+            Contact.tenant_id == tenant_id, Contact.email_address == sender_address
+        )
     )
     contact = result.scalar_one_or_none()
     if contact is None:
@@ -58,13 +89,23 @@ async def _get_or_create_contact(db: AsyncSession, *, tenant_id, sender_address:
 
 
 async def _get_or_create_case(
-    db: AsyncSession, *, tenant_id, contact: Contact, embedding: list[float], suggested_title: str | None, subject: str | None
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    contact: Contact,
+    embedding: list[float],
+    suggested_title: str | None,
+    subject: str | None,
 ) -> tuple[Case, bool, float | None]:
-    match = await case_matching.find_matching_case(db, tenant_id=tenant_id, contact_id=contact.id, embedding=embedding)
+    match = await case_matching.find_matching_case(
+        db, tenant_id=tenant_id, contact_id=contact.id, embedding=embedding
+    )
     if match is not None:
         # Ensure this contact is linked to the case (supports N contacts/case).
         existing = await db.execute(
-            select(CaseContact).where(CaseContact.case_id == match.case.id, CaseContact.contact_id == contact.id)
+            select(CaseContact).where(
+                CaseContact.case_id == match.case.id, CaseContact.contact_id == contact.id
+            )
         )
         if existing.scalar_one_or_none() is None:
             db.add(CaseContact(case_id=match.case.id, contact_id=contact.id))
@@ -80,14 +121,50 @@ async def _get_or_create_case(
     return case, True, None
 
 
+def _build_email(
+    *,
+    mailbox: Mailbox,
+    fetched: FetchedEmail,
+    contact: Contact,
+    case: Case,
+    result: classification.ClassificationResult,
+    embedding: list[float],
+) -> EmailMessage:
+    """Maps a fetched mail onto its row.
+
+    Header values arrive from the outside world and routinely exceed the
+    bounds their columns declare (a multi-kilobyte display name is a
+    standard spam pattern), so each bounded field goes through `fit` - see
+    app/models/limits.py.
+    """
+    return EmailMessage(
+        tenant_id=mailbox.tenant_id,
+        mailbox_id=mailbox.id,
+        contact_id=contact.id,
+        case_id=case.id,
+        gmail_message_id=fit(fetched.gmail_message_id, EmailMessage, "gmail_message_id"),
+        gmail_thread_id=fit(fetched.gmail_thread_id, EmailMessage, "gmail_thread_id"),
+        rfc822_message_id=fit(fetched.rfc822_message_id, EmailMessage, "rfc822_message_id"),
+        subject=fit(fetched.subject, EmailMessage, "subject"),
+        sender_address=fit(fetched.sender_address, EmailMessage, "sender_address"),
+        sender_name=fit(fetched.sender_name, EmailMessage, "sender_name"),
+        raw_content=fetched.raw_content,
+        snippet=fit(fetched.snippet, EmailMessage, "snippet"),
+        wichtigkeits_kategorie=result.wichtigkeits_kategorie,
+        typ=result.typ,
+        classification_confidence=result.confidence,
+        classification_reasoning=result.reasoning,
+        status=_STATUS_BY_WICHTIGKEIT[result.wichtigkeits_kategorie],
+        embedding=embedding,
+        received_at=fetched.received_at,
+    )
+
+
 def _attach_metadata(db: AsyncSession, *, email: EmailMessage, fetched: FetchedEmail) -> None:
     """Persists attachment metadata (filename, type, size, Gmail id).
 
-    The parser already collected this and the Attachment table already
-    existed, but nothing ever wrote a row - so the table was empty while
-    the README claimed the metadata was captured. The payload itself still
-    is not fetched; Attachment.storage_path is the prepared hook for that
-    (see README "Ausbaustufen").
+    The payload itself is not fetched; Attachment.storage_path is the
+    prepared hook for that (see README "Ausbaustufen").
     """
     for attachment in fetched.attachments:
         db.add(
@@ -104,99 +181,32 @@ def _attach_metadata(db: AsyncSession, *, email: EmailMessage, fetched: FetchedE
         )
 
 
-async def process_incoming_email(
+async def _log_classification(
     db: AsyncSession,
     *,
-    mailbox: Mailbox,
-    fetched: FetchedEmail,
-) -> EmailMessage | None:
-    """Idempotent: returns None (and does nothing) if this Gmail message was
-    already processed for this mailbox."""
-
-    existing = await db.execute(
-        select(EmailMessage).where(
-            EmailMessage.mailbox_id == mailbox.id,
-            EmailMessage.gmail_message_id == fetched.gmail_message_id,
-        )
-    )
-    if existing.scalar_one_or_none() is not None:
-        return None
-
-    tenant_id = mailbox.tenant_id
-
-    contact = await _get_or_create_contact(
-        db, tenant_id=tenant_id, sender_address=fetched.sender_address, sender_name=fetched.sender_name
-    )
-
-    classification_result = await classification.classify_email(
-        subject=fetched.subject,
-        sender_address=fetched.sender_address,
-        body=fetched.raw_content,
-        list_unsubscribe=fetched.list_unsubscribe,
-    )
-
-    embedding_text = f"{fetched.subject or ''}\n\n{fetched.raw_content}"
-    embedding = await embeddings.embed_text(embedding_text)
-
-    case, case_created, similarity = await _get_or_create_case(
-        db,
-        tenant_id=tenant_id,
-        contact=contact,
-        embedding=embedding,
-        suggested_title=classification_result.suggested_case_title,
-        subject=fetched.subject,
-    )
-
-    status = _STATUS_BY_WICHTIGKEIT[classification_result.wichtigkeits_kategorie]
-
-    email = EmailMessage(
-        tenant_id=tenant_id,
-        mailbox_id=mailbox.id,
-        contact_id=contact.id,
-        case_id=case.id,
-        # Header values arrive from the outside world and routinely exceed
-        # the bounds their columns declare (a multi-kilobyte display name is
-        # a standard spam pattern). Unfitted, Postgres raises
-        # StringDataRightTruncation and aborts the batch - see
-        # app/models/limits.py.
-        gmail_message_id=fit(fetched.gmail_message_id, EmailMessage, "gmail_message_id"),
-        gmail_thread_id=fit(fetched.gmail_thread_id, EmailMessage, "gmail_thread_id"),
-        rfc822_message_id=fit(fetched.rfc822_message_id, EmailMessage, "rfc822_message_id"),
-        subject=fit(fetched.subject, EmailMessage, "subject"),
-        sender_address=fit(fetched.sender_address, EmailMessage, "sender_address"),
-        sender_name=fit(fetched.sender_name, EmailMessage, "sender_name"),
-        raw_content=fetched.raw_content,
-        snippet=fit(fetched.snippet, EmailMessage, "snippet"),
-        wichtigkeits_kategorie=classification_result.wichtigkeits_kategorie,
-        typ=classification_result.typ,
-        classification_confidence=classification_result.confidence,
-        classification_reasoning=classification_result.reasoning,
-        status=status,
-        embedding=embedding,
-        received_at=fetched.received_at,
-    )
-    db.add(email)
-    await db.flush()
-
-    _attach_metadata(db, email=email, fetched=fetched)
-
+    email: EmailMessage,
+    result: classification.ClassificationResult,
+    case: Case,
+    case_created: bool,
+    similarity: float | None,
+) -> None:
     await log_action(
         db,
-        tenant_id=tenant_id,
+        tenant_id=email.tenant_id,
         actor=ActionActor.SYSTEM,
         entity_type="email_message",
         entity_id=email.id,
         action="classified",
         detail={
-            "wichtigkeits_kategorie": classification_result.wichtigkeits_kategorie.value,
-            "typ": classification_result.typ.value,
-            "confidence": classification_result.confidence,
-            "reasoning": classification_result.reasoning,
+            "wichtigkeits_kategorie": result.wichtigkeits_kategorie.value,
+            "typ": result.typ.value,
+            "confidence": result.confidence,
+            "reasoning": result.reasoning,
         },
     )
     await log_action(
         db,
-        tenant_id=tenant_id,
+        tenant_id=email.tenant_id,
         actor=ActionActor.SYSTEM,
         entity_type="email_message",
         entity_id=email.id,
@@ -204,56 +214,128 @@ async def process_incoming_email(
         detail={"case_id": str(case.id), "similarity": similarity},
     )
 
-    if classification_result.wichtigkeits_kategorie == WichtigkeitsKategorie.ANTWORT_ERFORDERLICH:
-        subject, body, rag_summary = await generate_draft(db, email=email)
-        draft = Draft(
-            tenant_id=tenant_id,
-            email_message_id=email.id,
-            subject=subject,
-            body=body,
-            rag_context_summary=rag_summary,
-        )
-        db.add(draft)
-        await db.flush()
-        await log_action(
-            db,
-            tenant_id=tenant_id,
-            actor=ActionActor.SYSTEM,
-            entity_type="draft",
-            entity_id=draft.id,
-            action="draft_generated",
-            detail={"email_message_id": str(email.id)},
-        )
-    elif classification_result.wichtigkeits_kategorie == WichtigkeitsKategorie.SPAM_VERDACHT:
-        await log_action(
-            db,
-            tenant_id=tenant_id,
-            actor=ActionActor.SYSTEM,
-            entity_type="email_message",
-            entity_id=email.id,
-            action="hidden_as_spam_verdacht",
-            detail={},
-        )
-    elif classification_result.wichtigkeits_kategorie == WichtigkeitsKategorie.INFORMATION:
-        await log_action(
-            db,
-            tenant_id=tenant_id,
-            actor=ActionActor.SYSTEM,
-            entity_type="email_message",
-            entity_id=email.id,
-            action="filed_as_information",
-            detail={"contact_id": str(contact.id), "case_id": str(case.id)},
-        )
-    elif classification_result.wichtigkeits_kategorie == WichtigkeitsKategorie.NEWSLETTER:
-        await log_action(
-            db,
-            tenant_id=tenant_id,
-            actor=ActionActor.SYSTEM,
-            entity_type="email_message",
-            entity_id=email.id,
-            action="labeled_newsletter",
-            detail={},
-        )
+
+async def _generate_draft_for(db: AsyncSession, *, email: EmailMessage) -> Draft | None:
+    """Generates and stores a reply draft for an antwort_erforderlich mail.
+
+    Returns None if the model produced no usable body - storing a blank
+    draft would just put an empty editor in front of a human with no
+    indication of why.
+    """
+    subject, body, rag_summary = await generate_draft(db, email=email)
+    if not body.strip():
+        logger.warning("draft_generation_empty_body email=%s", email.id)
+        return None
+
+    draft = Draft(
+        tenant_id=email.tenant_id,
+        email_message_id=email.id,
+        subject=fit(subject, Draft, "subject"),
+        body=body,
+        rag_context_summary=rag_summary,
+    )
+    db.add(draft)
+    await db.flush()
+    await log_action(
+        db,
+        tenant_id=email.tenant_id,
+        actor=ActionActor.SYSTEM,
+        entity_type="draft",
+        entity_id=draft.id,
+        action="draft_generated",
+        detail={"email_message_id": str(email.id)},
+    )
+    return draft
+
+
+async def _run_filing_action(
+    db: AsyncSession, *, email: EmailMessage, contact: Contact, case: Case
+) -> None:
+    """Records what was done with a mail that needs no reply."""
+    action = _FILING_ACTION_BY_WICHTIGKEIT.get(email.wichtigkeits_kategorie)
+    if action is None:
+        return
+    await log_action(
+        db,
+        tenant_id=email.tenant_id,
+        actor=ActionActor.SYSTEM,
+        entity_type="email_message",
+        entity_id=email.id,
+        action=action,
+        detail={"contact_id": str(contact.id), "case_id": str(case.id)},
+    )
+
+
+async def process_incoming_email(
+    db: AsyncSession,
+    *,
+    mailbox: Mailbox,
+    fetched: FetchedEmail,
+) -> EmailMessage | None:
+    """Processes one fetched mail end to end.
+
+    Idempotent: returns None (and does nothing) if this Gmail message was
+    already processed for this mailbox. Owns the transaction - the caller
+    (app/workers/tasks.py) relies on a committed row to know it need not
+    re-spend Claude tokens on this mail.
+    """
+    if await _already_processed(
+        db, mailbox=mailbox, gmail_message_id=fetched.gmail_message_id
+    ):
+        return None
+
+    tenant_id = mailbox.tenant_id
+
+    contact = await _get_or_create_contact(
+        db,
+        tenant_id=tenant_id,
+        sender_address=fetched.sender_address,
+        sender_name=fetched.sender_name,
+    )
+
+    result = await classification.classify_email(
+        subject=fetched.subject,
+        sender_address=fetched.sender_address,
+        body=fetched.raw_content,
+        list_unsubscribe=fetched.list_unsubscribe,
+    )
+
+    embedding = await embeddings.embed_text(f"{fetched.subject or ''}\n\n{fetched.raw_content}")
+
+    case, case_created, similarity = await _get_or_create_case(
+        db,
+        tenant_id=tenant_id,
+        contact=contact,
+        embedding=embedding,
+        suggested_title=result.suggested_case_title,
+        subject=fetched.subject,
+    )
+
+    email = _build_email(
+        mailbox=mailbox,
+        fetched=fetched,
+        contact=contact,
+        case=case,
+        result=result,
+        embedding=embedding,
+    )
+    db.add(email)
+    await db.flush()
+
+    _attach_metadata(db, email=email, fetched=fetched)
+    await _log_classification(
+        db,
+        email=email,
+        result=result,
+        case=case,
+        case_created=case_created,
+        similarity=similarity,
+    )
+
+    if result.wichtigkeits_kategorie is WichtigkeitsKategorie.ANTWORT_ERFORDERLICH:
+        await _generate_draft_for(db, email=email)
+    else:
+        await _run_filing_action(db, email=email, contact=contact, case=case)
 
     await db.commit()
     return email

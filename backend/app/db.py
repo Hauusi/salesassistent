@@ -8,6 +8,10 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import get_settings
 
+# One of only two places that read settings at import time, deliberately:
+# the engine is process-global by nature and must exist before any module
+# that imports it. Everywhere else calls get_settings() inside the function
+# that needs it, so configuration is not frozen by import order.
 settings = get_settings()
 
 engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)

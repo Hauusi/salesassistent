@@ -25,6 +25,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 QUEUE_NAME = "mail_processing"
+POLL_JOB_PATH = "app.workers.tasks.poll_mailbox_job"
 
 # Job states that mean "this mailbox already has a poll in flight".
 _IN_FLIGHT = frozenset({"queued", "started", "deferred", "scheduled"})
@@ -68,11 +69,12 @@ def enqueue_poll(mailbox_id: str) -> Job | None:
         logger.info("poll_skipped_already_in_flight mailbox=%s", mailbox_id)
         return None
 
-    from app.workers.tasks import poll_mailbox_job
-
     settings = get_settings()
     return get_queue().enqueue(
-        poll_mailbox_job,
+        # Referenced by dotted path rather than imported: queue and tasks
+        # would otherwise import each other, which is what forced both
+        # modules into function-local imports before.
+        POLL_JOB_PATH,
         mailbox_id,
         job_id=poll_job_id(mailbox_id),
         job_timeout=settings.mail_poll_job_timeout_seconds,

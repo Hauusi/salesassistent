@@ -16,10 +16,9 @@ from app.workers.tasks import enqueue_poll_for_all_active_mailboxes
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
-
 
 def main() -> None:
+    settings = get_settings()
     logger.info("Scheduler started, polling every %ss", settings.mail_poll_interval_seconds)
     while True:
         try:

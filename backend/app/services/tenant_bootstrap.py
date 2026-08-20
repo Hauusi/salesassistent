@@ -16,10 +16,9 @@ from app.config import get_settings
 from app.models.tenant import Tenant
 from app.models.user import User
 
-settings = get_settings()
-
 
 async def get_or_create_default_tenant(db: AsyncSession) -> Tenant:
+    settings = get_settings()
     result = await db.execute(select(Tenant).where(Tenant.slug == settings.default_tenant_slug))
     tenant = result.scalar_one_or_none()
     if tenant is None:

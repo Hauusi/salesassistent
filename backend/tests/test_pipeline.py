@@ -235,3 +235,51 @@ async def test_a_mail_without_attachments_creates_no_rows(
         )
     ).scalars().all()
     assert stored == []
+
+
+async def test_an_empty_generated_body_does_not_create_a_blank_draft(
+    db_session: AsyncSession, mailbox: Mailbox, monkeypatch
+) -> None:
+    """A blank draft puts an empty editor in front of a human with no
+    indication of why - better to record the mail and generate nothing."""
+    _patch_llm_and_embeddings(monkeypatch, ANFRAGE_MAIL)
+
+    async def _empty_draft(_db, *, email, client=None):
+        return "Re: Betreff", "   ", "Kein RAG-Kontext verfügbar."
+
+    monkeypatch.setattr(pipeline, "generate_draft", _empty_draft)
+
+    email = await pipeline.process_incoming_email(
+        db_session, mailbox=mailbox, fetched=_fetched_from_fixture(ANFRAGE_MAIL)
+    )
+
+    assert email is not None
+    assert email.status is EmailStatus.WARTET_AUF_FREIGABE
+    drafts = (
+        await db_session.execute(select(Draft).where(Draft.email_message_id == email.id))
+    ).scalars().all()
+    assert drafts == []
+
+
+async def test_every_category_records_a_filing_action(
+    db_session: AsyncSession, mailbox: Mailbox, monkeypatch
+) -> None:
+    """The per-category behaviour is table-driven; this pins that every
+    non-reply category still lands in the audit trail."""
+    expected = {
+        "information": "filed_as_information",
+        "newsletter": "labeled_newsletter",
+        "spam_verdacht": "hidden_as_spam_verdacht",
+    }
+    for fixture in (INFORMATION_MAIL, NEWSLETTER_MAIL, SPAM_MAIL):
+        _patch_llm_and_embeddings(monkeypatch, fixture)
+        email = await pipeline.process_incoming_email(
+            db_session, mailbox=mailbox, fetched=_fetched_from_fixture(fixture)
+        )
+        actions = (
+            await db_session.execute(
+                select(ActionLog.action).where(ActionLog.entity_id == email.id)
+            )
+        ).scalars().all()
+        wanted = expected[fixture["expected"]["wichtigkeits_kategorie"]]
+        assert wanted in actions, f"{wanted} fehlt für {fixture['expected']}"
