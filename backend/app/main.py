@@ -1,18 +1,48 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import auth, cases, drafts, emails, knowledge, mailboxes
 from app.config import get_settings
+from app.db import engine
+from app.services import startup_checks
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Sales-Assistent - Mail-Modul", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Validates settings that must agree with the database before serving.
+
+    A mismatch here otherwise surfaces much later and far from its cause -
+    as an insert that rejects every embedding, or a product search that
+    silently matches nothing. Failing at boot puts it in front of whoever
+    is deploying.
+    """
+    settings = get_settings()
+    try:
+        await startup_checks.run_all(engine)
+    except startup_checks.StartupCheckFailed:
+        # In development, surfacing this as a loud log and carrying on is
+        # more useful than refusing to boot before the DB is migrated.
+        if settings.app_env == "development":
+            logger.exception("startup_check_failed (development: continuing anyway)")
+        else:
+            raise
+    yield
+    await engine.dispose()
+
+
+app = FastAPI(title="Sales-Assistent - Mail-Modul", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_base_url],
+    allow_origins=[get_settings().frontend_base_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

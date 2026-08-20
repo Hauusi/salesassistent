@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     # not older than this, to avoid tying a mail to a long-dead thread.
     case_lookback_days: int = 180
 
+    # --- Product search ---
+    # Postgres text-search configuration used to stem and stop-word both
+    # the catalog text and the inquiry (see app/services/product_search.py).
+    # Must name a configuration this database actually has - validated at
+    # startup. Set to the language your catalog and your customers write in.
+    product_search_text_config: str = "german"
+
     # --- Single-tenant MVP bootstrap ---
     default_tenant_slug: str = "default"
 

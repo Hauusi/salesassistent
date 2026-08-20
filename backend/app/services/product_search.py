@@ -1,58 +1,86 @@
-"""Keyword-based product lookup for grounding draft generation on
-Angebotsanfragen (typ=anfrage) - see app/services/draft_generation.py.
+"""Product lookup for grounding draft generation on Angebotsanfragen
+(typ=anfrage) - see app/services/draft_generation.py.
 
-Deliberately plain ILIKE/keyword search rather than embeddings: the
-concept scope for this feature explicitly asks for "Textsuche im
-Namen/Kategorie/Beschreibung, basierend auf den Begriffen aus der
-Anfrage" - a small product catalog doesn't need semantic search, and
-this keeps the feature independent of the Voyage embedding pipeline.
+Backed by Postgres full-text search rather than hand-rolled keyword
+matching. The previous implementation carried two workarounds that the
+database does properly:
+
+- Stemming by chopping the last character off words longer than five
+  ("Aluminiumprofile" -> "Aluminiumprofil"). That only ever worked for the
+  "-e" plural: "Motoren" became "motore" and never matched "Motor", and
+  anything five characters or shorter was not stemmed at all.
+- An 80-entry hardcoded German stopword list. Not tenant-aware, not
+  translatable, and it dropped tokens that carry meaning in a product
+  context ("zwei" is a stopword, so a "Zwei-Komponenten-Kleber" category
+  could not be found by that word).
+
+`to_tsvector`/`to_tsquery` with a language configuration handle both,
+correctly and in every language Postgres ships a configuration for. The
+configuration is set via PRODUCT_SEARCH_TEXT_CONFIG and validated at
+startup (see app/services/startup_checks.py).
+
+Terms are OR-ed rather than AND-ed: an inquiry mentions far more words
+than any single catalog entry contains, so requiring all of them would
+match nothing. `ts_rank` then orders by how well each product covers the
+inquiry, which is what the old "count how many keywords hit" score was
+approximating.
 """
 from __future__ import annotations
 
-import re
 import uuid
-from functools import reduce
-from operator import add
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import Text, cast, column, func, literal, literal_column, or_, select
+from sqlalchemy.dialects.postgresql import REGCONFIG, TSQUERY
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models.product import Product
 
-# Common German (and a few English) filler words that show up in inquiry
-# mails but carry no product-matching signal - excluded so they don't
-# drown out the actual product terms when extracting keywords.
-_STOPWORDS = {
-    "aber", "alle", "als", "also", "auch", "auf", "aus", "bei", "bekommen",
-    "benötigen", "bestellen", "bitte", "dabei", "damit", "dann", "das",
-    "dass", "dem", "den", "der", "des", "die", "dies", "diese", "dieser",
-    "dieses", "doch", "durch", "ein", "eine", "einen", "einer", "eines", "euch",
-    "für", "fuer", "gerne", "gruß", "grüße", "haben", "hallo", "hat", "hätten",
-    "ich", "ihnen", "ihre", "ihrer", "ist", "können", "könnten", "mit",
-    "möchte", "möchten", "nach", "nicht", "noch", "nur", "oder", "sehr",
-    "sich", "sie", "sind", "sollten", "über", "und", "uns", "unser",
-    "unsere", "vielen", "von", "vor", "wann", "was", "wenn", "werden",
-    "wir", "wird", "wäre", "würde", "würden", "zum", "zur", "zwei",
-    "anfrage", "angebot", "angeboten", "danke", "email", "freundlichen",
-    "geehrte", "geehrter", "damen", "herren", "please", "thanks", "hello",
-    "the", "and", "for", "with", "this", "that", "you", "your",
-}
 
-_WORD_RE = re.compile(r"[A-Za-zÄÖÜäöüß0-9][A-Za-zÄÖÜäöüß0-9\-]{2,}")
+def _text_config():
+    """The Postgres text-search configuration to stem and stop-word with."""
+    return cast(literal(get_settings().product_search_text_config), REGCONFIG)
 
 
-def extract_keywords(text: str, *, limit: int = 15) -> list[str]:
-    """Pulls distinct, plausibly product-relevant words out of free text,
-    preserving first-seen order. Short/stopword tokens are dropped."""
-    seen: dict[str, None] = {}
-    for match in _WORD_RE.finditer(text.lower()):
-        word = match.group(0)
-        if word in _STOPWORDS or word.isdigit():
-            continue
-        seen.setdefault(word, None)
-        if len(seen) >= limit:
-            break
-    return list(seen.keys())
+def _searchable_document():
+    """The concatenated product text that a query is matched against.
+
+    Weighted so a hit in the name outranks one in the description: a
+    product *called* "Aluminiumprofil" is a better answer to a request for
+    aluminium profiles than one that merely mentions them in prose.
+    """
+    cfg = _text_config()
+
+    def weighted(field, weight: str):
+        # setweight's second argument is Postgres' "char" type, which a
+        # bound varchar parameter does not coerce to - hence the literal.
+        return func.setweight(
+            func.to_tsvector(cfg, func.coalesce(field, "")), literal_column(f"'{weight}'")
+        )
+
+    return (
+        weighted(Product.name, "A")
+        .op("||")(weighted(Product.category, "B"))
+        .op("||")(weighted(Product.sku, "B"))
+        .op("||")(weighted(Product.description, "C"))
+    )
+
+
+def _or_tsquery(query_text: str):
+    """Turns free text into an OR-ed tsquery, via the configuration's own
+    stemmer and stopword list.
+
+    Runs the text through to_tsvector first (which stems and drops
+    stopwords), then re-joins the surviving lexemes with "|". Yields NULL
+    when nothing survives - a greetings-only mail, say - and `@@ NULL` is
+    never true, so that needs no special case in the caller.
+    """
+    lexemes = (
+        select(func.string_agg(column("lexeme"), literal(" | ")))
+        .select_from(func.unnest(func.to_tsvector(_text_config(), cast(literal(query_text), Text))).alias("lex"))
+        .scalar_subquery()
+    )
+    return cast(func.nullif(lexemes, ""), TSQUERY)
 
 
 async def search_products(
@@ -62,39 +90,58 @@ async def search_products(
     query_text: str,
     limit: int = 5,
 ) -> list[Product]:
-    """Finds products whose name/category/description mention keywords
-    from `query_text`, best matches (most keyword hits) first. Returns an
-    empty list if no keyword matches anything - callers should treat that
-    as "no grounding available", not an error."""
-    keywords = extract_keywords(query_text)
-    if not keywords:
+    """Finds catalog entries relevant to `query_text`, best match first.
+
+    Returns an empty list when nothing matches - callers should treat that
+    as "no grounding available", not an error.
+    """
+    if not query_text or not query_text.strip():
         return []
 
-    per_keyword_matches = []
-    for keyword in keywords:
-        # Cheap stemming: drop the last character on longer words so a
-        # plural in the inquiry ("Aluminiumprofile") still matches a
-        # singular catalog entry ("Aluminiumprofil"), and vice versa -
-        # good enough for German noun endings without a real stemmer.
-        stem = keyword[:-1] if len(keyword) > 5 else keyword
-        pattern = f"%{stem}%"
-        per_keyword_matches.append(
-            or_(
-                Product.name.ilike(pattern),
-                Product.category.ilike(pattern),
-                Product.description.ilike(pattern),
-            )
-        )
-
-    # Relevance score: how many distinct keywords hit this product.
-    score = reduce(add, (case((m, 1), else_=0) for m in per_keyword_matches))
+    document = _searchable_document()
+    query = _or_tsquery(query_text)
 
     stmt = (
         select(Product)
-        .where(Product.tenant_id == tenant_id, or_(*per_keyword_matches))
-        .order_by(score.desc(), Product.name)
+        .where(Product.tenant_id == tenant_id, document.op("@@")(query))
+        .order_by(func.ts_rank(document, query).desc(), Product.name)
         .limit(limit)
     )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def search_products_by_text(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    q: str | None = None,
+    category: str | None = None,
+    limit: int = 200,
+) -> list[Product]:
+    """Catalog browsing for the UI: substring matching, not relevance
+    ranking.
+
+    Deliberately not the same function as `search_products` above. A person
+    typing into a filter box expects "show me rows containing what I typed",
+    including partial words and SKU fragments; an inquiry mail needs
+    stemmed, ranked relevance. Conflating the two makes one of them wrong.
+    """
+    stmt = select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name).limit(limit)
+
+    if category:
+        stmt = stmt.where(Product.category == category)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Product.name.ilike(like),
+                Product.description.ilike(like),
+                Product.category.ilike(like),
+                Product.sku.ilike(like),
+            )
+        )
+
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

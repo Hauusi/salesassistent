@@ -21,6 +21,7 @@ from app.models.tenant import Tenant
 from app.schemas.email import EmailOut
 from app.schemas.product import ProductCreateIn, ProductImportResult, ProductOut, ProductUpdateIn
 from app.services.product_import import import_products_csv
+from app.services.product_search import search_products_by_text
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -82,21 +83,12 @@ async def list_products(
     db: AsyncSession = Depends(get_db),
     tenant: Tenant = Depends(get_current_tenant),
 ) -> list[Product]:
-    stmt = (
-        select(Product)
-        .where(Product.tenant_id == tenant.id)
-        .order_by(Product.name)
-        .limit(limit)
+    # Substring filtering, deliberately not the ranked full-text search
+    # used for inquiry mails - see app/services/product_search.py for why
+    # the two are separate functions.
+    return await search_products_by_text(
+        db, tenant_id=tenant.id, q=q, category=category, limit=limit
     )
-    if category:
-        stmt = stmt.where(Product.category == category)
-    if q:
-        like = f"%{q}%"
-        stmt = stmt.where(
-            or_(Product.name.ilike(like), Product.description.ilike(like), Product.category.ilike(like))
-        )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
 
 
 @router.post("/products", response_model=ProductOut, status_code=201)
