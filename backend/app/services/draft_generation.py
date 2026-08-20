@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 from anthropic import AsyncAnthropic
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -67,16 +67,28 @@ async def _gather_rag_context(
     if contact_id is None and case_id is None:
         return []
 
+    # Match on either the case or the contact, not case-then-contact. The
+    # pipeline always assigns a case, so the old `elif` branch was
+    # unreachable - which quietly meant earlier correspondence with the
+    # same customer under a *different* case never reached the draft, even
+    # though the docstring promised "prior correspondence with the same
+    # contact/case".
+    scopes = []
+    if case_id is not None:
+        scopes.append(EmailMessage.case_id == case_id)
+    if contact_id is not None:
+        scopes.append(EmailMessage.contact_id == contact_id)
+
     stmt = (
         select(EmailMessage)
-        .where(EmailMessage.tenant_id == tenant_id, EmailMessage.id != exclude_email_id)
+        .where(
+            EmailMessage.tenant_id == tenant_id,
+            EmailMessage.id != exclude_email_id,
+            or_(*scopes),
+        )
         .order_by(EmailMessage.received_at.desc())
         .limit(limit)
     )
-    if case_id is not None:
-        stmt = stmt.where(EmailMessage.case_id == case_id)
-    elif contact_id is not None:
-        stmt = stmt.where(EmailMessage.contact_id == contact_id)
 
     result = await db.execute(stmt)
     return list(result.scalars().all())

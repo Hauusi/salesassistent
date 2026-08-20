@@ -110,10 +110,18 @@ async def import_products(
     db: AsyncSession = Depends(get_db),
     tenant: Tenant = Depends(get_current_tenant),
 ) -> ProductImportResult:
-    if file.content_type not in (None, "text/csv", "application/vnd.ms-excel", "application/octet-stream"):
+    # The browser decides this header, and browsers disagree: Firefox on
+    # Linux commonly sends text/plain for a .csv, Windows sends
+    # application/vnd.ms-excel. Rejecting on it produced false alarms for
+    # perfectly good files while adding nothing - import_products_csv
+    # validates the header row itself and reports per-row errors. So this
+    # only rejects types that are certainly not text.
+    if file.content_type and file.content_type.startswith(("image/", "video/", "audio/")):
         raise HTTPException(status_code=400, detail=f"Unerwarteter Dateityp: {file.content_type}")
 
     raw = await file.read()
+    if not raw.strip():
+        raise HTTPException(status_code=400, detail="Die hochgeladene Datei ist leer.")
     try:
         csv_text = raw.decode("utf-8-sig")  # tolerate Excel's BOM-prefixed UTF-8 exports
     except UnicodeDecodeError as exc:

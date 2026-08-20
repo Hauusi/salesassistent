@@ -16,6 +16,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.attachment import Attachment
 from app.models.case import Case, CaseContact
 from app.models.contact import Contact
 from app.models.email_message import EmailMessage
@@ -77,6 +78,30 @@ async def _get_or_create_case(
     db.add(CaseContact(case_id=case.id, contact_id=contact.id))
     await db.flush()
     return case, True, None
+
+
+def _attach_metadata(db: AsyncSession, *, email: EmailMessage, fetched: FetchedEmail) -> None:
+    """Persists attachment metadata (filename, type, size, Gmail id).
+
+    The parser already collected this and the Attachment table already
+    existed, but nothing ever wrote a row - so the table was empty while
+    the README claimed the metadata was captured. The payload itself still
+    is not fetched; Attachment.storage_path is the prepared hook for that
+    (see README "Ausbaustufen").
+    """
+    for attachment in fetched.attachments:
+        db.add(
+            Attachment(
+                tenant_id=email.tenant_id,
+                email_message_id=email.id,
+                filename=fit(attachment.filename, Attachment, "filename"),
+                content_type=fit(attachment.content_type, Attachment, "content_type"),
+                size_bytes=attachment.size_bytes,
+                gmail_attachment_id=fit(
+                    attachment.gmail_attachment_id, Attachment, "gmail_attachment_id"
+                ),
+            )
+        )
 
 
 async def process_incoming_email(
@@ -152,6 +177,8 @@ async def process_incoming_email(
     )
     db.add(email)
     await db.flush()
+
+    _attach_metadata(db, email=email, fetched=fetched)
 
     await log_action(
         db,

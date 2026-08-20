@@ -179,3 +179,59 @@ async def test_processing_same_gmail_message_twice_is_idempotent(
         select(EmailMessage).where(EmailMessage.gmail_message_id == fetched.gmail_message_id)
     )
     assert len(count_result.scalars().all()) == 1
+
+
+async def test_attachment_metadata_is_persisted(
+    db_session: AsyncSession, mailbox: Mailbox, monkeypatch
+) -> None:
+    """The parser collected this and the table existed, but nothing ever
+    wrote a row - while the README claimed the metadata was captured."""
+    from app.models.attachment import Attachment
+    from app.services.gmail_client import FetchedAttachment
+
+    _patch_llm_and_embeddings(monkeypatch, ANFRAGE_MAIL)
+    fetched = _fetched_from_fixture(ANFRAGE_MAIL)
+    fetched.attachments = [
+        FetchedAttachment(
+            filename="angebot.pdf",
+            content_type="application/pdf",
+            size_bytes=2048,
+            gmail_attachment_id="att-1",
+        ),
+        FetchedAttachment(
+            filename="zeichnung.dwg", content_type=None, size_bytes=None, gmail_attachment_id=None
+        ),
+    ]
+
+    email = await pipeline.process_incoming_email(db_session, mailbox=mailbox, fetched=fetched)
+
+    stored = (
+        await db_session.execute(
+            select(Attachment).where(Attachment.email_message_id == email.id)
+        )
+    ).scalars().all()
+
+    assert {a.filename for a in stored} == {"angebot.pdf", "zeichnung.dwg"}
+    pdf = next(a for a in stored if a.filename == "angebot.pdf")
+    assert pdf.content_type == "application/pdf"
+    assert pdf.size_bytes == 2048
+    assert pdf.gmail_attachment_id == "att-1"
+    assert pdf.tenant_id == email.tenant_id
+
+
+async def test_a_mail_without_attachments_creates_no_rows(
+    db_session: AsyncSession, mailbox: Mailbox, monkeypatch
+) -> None:
+    from app.models.attachment import Attachment
+
+    _patch_llm_and_embeddings(monkeypatch, INFORMATION_MAIL)
+    email = await pipeline.process_incoming_email(
+        db_session, mailbox=mailbox, fetched=_fetched_from_fixture(INFORMATION_MAIL)
+    )
+
+    stored = (
+        await db_session.execute(
+            select(Attachment).where(Attachment.email_message_id == email.id)
+        )
+    ).scalars().all()
+    assert stored == []

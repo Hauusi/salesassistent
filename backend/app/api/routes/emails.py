@@ -39,8 +39,19 @@ async def list_emails(
         .order_by(EmailMessage.received_at.desc())
         .limit(limit)
     )
-    if not include_spam and status is None:
-        stmt = stmt.where(EmailMessage.status != EmailStatus.AUSGEBLENDET)
+    # Hide spam unless it was asked for - by the flag, or implicitly by
+    # filtering for the category itself. Previously this was also gated on
+    # `status is None`, which coupled two unrelated filters: selecting
+    # "Spam-Verdacht" in the UI returned an empty list unless the checkbox
+    # was ticked as well, and *any* status filter silently disabled spam
+    # hiding altogether.
+    asked_for_spam = include_spam or wichtigkeit is WichtigkeitsKategorie.SPAM_VERDACHT
+    if not asked_for_spam:
+        stmt = stmt.where(
+            EmailMessage.wichtigkeits_kategorie.is_distinct_from(
+                WichtigkeitsKategorie.SPAM_VERDACHT
+            )
+        )
     if wichtigkeit is not None:
         stmt = stmt.where(EmailMessage.wichtigkeits_kategorie == wichtigkeit)
     if typ is not None:
