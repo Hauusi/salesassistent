@@ -32,9 +32,10 @@ def strip_quoted_reply(text: str) -> str:
     """Cuts off the quoted/forwarded trail from an email body, keeping only
     the new top-level message the sender actually wrote. Falls back to the
     full text unchanged if no quote marker is found (e.g. a first mail in a
-    thread, or a body that doesn't follow these conventions) - this is a
-    best-effort trim, not a guarantee, so it never raises or drops content
-    it isn't confident about."""
+    thread, or a body that doesn't follow these conventions), or if the
+    markers matched right at the start - this is a best-effort trim, not a
+    guarantee, so it never raises or drops content it isn't confident
+    about."""
     if not text:
         return text
 
@@ -44,4 +45,21 @@ def strip_quoted_reply(text: str) -> str:
         if match and match.start() < earliest:
             earliest = match.start()
 
-    return text[:earliest].rstrip()
+    trimmed = text[:earliest].rstrip()
+
+    # A quote-*led* body - a top-posted forward, an inline reply that opens
+    # by quoting, or any body whose first line happens to start with ">" -
+    # matches at (or only whitespace after) position 0, leaving nothing
+    # behind. That empty string used to flow straight into the
+    # classification and draft-generation prompts, where it fails silently:
+    # both still produce an answer, just one based on nothing but sender and
+    # subject. Returning the untrimmed body costs some redundant tokens in
+    # that case, which is by far the cheaper direction of the trade.
+    #
+    # Note this deliberately keys on "did the trim leave anything at all",
+    # not on a minimum length: a genuine one-line reply ("Ja, gerne.") above
+    # a long quote trail is a correct, valuable trim and must stay one.
+    if not trimmed:
+        return text.rstrip()
+
+    return trimmed

@@ -50,3 +50,38 @@ def test_strip_quoted_reply_leaves_text_without_quote_markers_untouched() -> Non
 
 def test_strip_quoted_reply_handles_empty_string() -> None:
     assert strip_quoted_reply("") == ""
+
+
+def test_strip_quoted_reply_keeps_body_that_starts_with_a_quote_line() -> None:
+    """Regression: the bare ">" marker matches at position 0 for a
+    top-posted forward or an inline reply that opens by quoting. Trimming
+    there produced an empty body, which silently reached the classifier and
+    the draft generator as "no content at all"."""
+    body = "> Angebot für 5 Stück Aluminiumprofil\n\nHallo, bitte um Preis und Lieferzeit."
+    assert strip_quoted_reply(body) == body
+
+
+def test_strip_quoted_reply_keeps_body_that_starts_with_a_nested_quote() -> None:
+    body = ">>> Weitergeleitete Nachricht\nGuten Tag, wir brauchen 200 Schrauben M8."
+    assert strip_quoted_reply(body) == body
+
+
+def test_strip_quoted_reply_keeps_body_whose_quote_header_is_the_first_line() -> None:
+    body = "Am 12.03.2024 um 10:15 schrieb Max Mustermann <max@example.com>:\n> alter Text"
+    # Nothing of the sender's own is above the marker - keep the raw text
+    # rather than handing an empty string to the LLM.
+    assert strip_quoted_reply(body) == body
+
+
+def test_strip_quoted_reply_still_trims_when_enough_content_remains() -> None:
+    body = (
+        "Guten Tag, wir benötigen ein Angebot über 200 Schrauben M8.\n\n"
+        "Am 12.03.2024 um 10:15 schrieb Max <max@example.com>:\n"
+        "> alter Text"
+    )
+    assert strip_quoted_reply(body) == "Guten Tag, wir benötigen ein Angebot über 200 Schrauben M8."
+
+
+def test_strip_quoted_reply_returns_short_body_untouched_when_there_is_no_quote() -> None:
+    # A genuinely short mail must not be confused with a failed trim.
+    assert strip_quoted_reply("Danke!") == "Danke!"
