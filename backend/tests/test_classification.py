@@ -227,3 +227,44 @@ async def test_classify_email_raises_clear_error_without_tool_use() -> None:
         await classify_email(
             subject="Test", sender_address="a@b.de", body="Hallo", client=client
         )
+
+
+async def test_classify_email_survives_a_category_outside_the_schema_enum() -> None:
+    """Forced tool use makes a well-formed call very likely, but the API
+    does not hard-enforce a tool schema's `enum`. A hallucinated value used
+    to raise ValueError out of classify_email and abort the whole poll
+    batch; it must degrade this one mail's metadata instead."""
+    client = FakeAnthropicClient(
+        response_fn=lambda _k: tool_response(
+            wichtigkeits_kategorie="sehr_wichtig",  # not in the enum
+            typ="bestellung",
+            confidence=0.9,
+            reasoning="Test",
+        )
+    )
+
+    result = await classify_email(
+        subject="Betreff", sender_address="kunde@example.com", body="Text", client=client
+    )
+
+    assert result.wichtigkeits_kategorie is WichtigkeitsKategorie.INFORMATION
+    assert result.typ is TypKategorie.BESTELLUNG
+
+
+async def test_classify_email_survives_a_missing_optional_field() -> None:
+    client = FakeAnthropicClient(
+        response_fn=lambda _k: tool_response(
+            wichtigkeits_kategorie="information",
+            typ="keiner",
+            confidence="0.8",  # a string where the schema says number
+            # `reasoning` omitted entirely
+        )
+    )
+
+    result = await classify_email(
+        subject="Betreff", sender_address="kunde@example.com", body="Text", client=client
+    )
+
+    assert result.confidence == 0.8
+    assert result.reasoning  # a placeholder, never a KeyError
+    assert result.suggested_case_title is None

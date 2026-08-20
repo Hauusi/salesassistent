@@ -17,11 +17,16 @@ from anthropic import AsyncAnthropic
 from app.config import get_settings
 from app.models.enums import TypKategorie, WichtigkeitsKategorie
 from app.services.email_text import strip_quoted_reply
-from app.services.llm_client import get_anthropic_client
+from app.services.llm_client import (
+    call_tool,
+    coerce_enum,
+    coerce_float,
+    coerce_str,
+    get_anthropic_client,
+)
 from app.services.newsletter_prefilter import prefilter_newsletter_reason
 from app.services.token_metrics import log_prompt_breakdown
 
-settings = get_settings()
 logger = logging.getLogger("app.llm.tokens")
 
 # Kept information-dense on purpose (one line per enum value covers the
@@ -124,7 +129,7 @@ async def classify_email(
     if prefilter_reason is not None:
         logger.info(
             "claude_call_skipped call=classify_email model=%s reason=%s",
-            settings.anthropic_classification_model,
+            get_settings().anthropic_classification_model,
             prefilter_reason,
         )
         return ClassificationResult(
@@ -134,26 +139,21 @@ async def classify_email(
             reasoning=prefilter_reason,
         )
 
+    settings = get_settings()
     client = client or get_anthropic_client()
     user_message = _build_user_message(subject=subject, sender_address=sender_address, body=body)
 
-    response = await client.messages.create(
+    # Retry policy, forced-tool extraction and the "did we even get a tool
+    # call" check all live in llm_client - see that module for what is
+    # retried and what is not.
+    data, response = await call_tool(
+        client,
+        call="classify_email",
         model=settings.anthropic_classification_model,
         max_tokens=1024,
-        # A breakpoint on the (only) system block also covers the tools
-        # block, since tools render before system - see
-        # https://docs.claude.com/en/docs/build-with-claude/prompt-caching.
-        # Both are static/identical across every classify_email call. Note:
-        # system+tool schema here (~500 tokens) is currently below Haiku's
-        # ~4096-token minimum cacheable prefix, so this is a no-op today
-        # (no error, no charge - cache_creation_input_tokens stays 0), not
-        # a current cost saving. It's forward-compatible for free: as soon
-        # as this prompt grows (few-shot examples, tenant-specific rules),
-        # it starts getting cached with zero further code changes.
-        system=[{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        tools=[_CLASSIFY_TOOL],
-        tool_choice={"type": "tool", "name": "classify_email"},
-        messages=[{"role": "user", "content": user_message}],
+        system=_SYSTEM_PROMPT,
+        tool=_CLASSIFY_TOOL,
+        user_message=user_message,
     )
 
     log_prompt_breakdown(
@@ -165,15 +165,32 @@ async def classify_email(
         usage=getattr(response, "usage", None),
     )
 
-    tool_use = next((block for block in response.content if getattr(block, "type", None) == "tool_use"), None)
-    if tool_use is None:
-        raise ValueError("Claude hat kein 'classify_email' Tool-Ergebnis zurückgegeben.")
-    data = tool_use.input
-
+    # The tool schema constrains both category fields to an enum, but the
+    # API does not hard-enforce that, so this is still untrusted input.
+    # Coerce with a conservative fallback rather than raising: a single odd
+    # response should cost one mail's classification accuracy, not the whole
+    # poll batch (see app/workers/tasks.py). INFORMATION is the safe default
+    # - it files the mail as searchable and visible without claiming an
+    # answer is needed or hiding it as spam.
     return ClassificationResult(
-        wichtigkeits_kategorie=WichtigkeitsKategorie(data["wichtigkeits_kategorie"]),
-        typ=TypKategorie(data["typ"]),
-        confidence=float(data["confidence"]),
-        reasoning=data["reasoning"],
-        suggested_case_title=data.get("suggested_case_title"),
+        wichtigkeits_kategorie=coerce_enum(
+            data.get("wichtigkeits_kategorie"),
+            WichtigkeitsKategorie,
+            WichtigkeitsKategorie.INFORMATION,
+            field="wichtigkeits_kategorie",
+            call="classify_email",
+        ),
+        typ=coerce_enum(
+            data.get("typ"),
+            TypKategorie,
+            TypKategorie.KEINER,
+            field="typ",
+            call="classify_email",
+        ),
+        confidence=coerce_float(
+            data.get("confidence"), 0.0, minimum=0.0, maximum=1.0,
+            field="confidence", call="classify_email",
+        ),
+        reasoning=coerce_str(data.get("reasoning"), "(keine Begründung geliefert)", max_chars=1000),
+        suggested_case_title=coerce_str(data.get("suggested_case_title"), max_chars=500) or None,
     )

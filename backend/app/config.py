@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # be tuned/rolled back independently of the draft-generation model.
     anthropic_classification_model: str = "claude-haiku-4-5"
 
+    # --- LLM call resilience ---
+    # Rate limits (429) and overloaded/5xx responses are routine at load,
+    # not exceptional, and an unhandled one used to abort a whole poll
+    # batch. Retried with exponential backoff in app/services/llm_client.py;
+    # permanent errors (auth, malformed request) are never retried.
+    llm_max_attempts: int = 4
+    llm_retry_min_seconds: float = 2.0
+    llm_retry_max_seconds: float = 30.0
+    llm_retry_backoff_multiplier: float = 2.0
+
     # --- Voyage AI (embeddings for case/RAG matching) ---
     voyage_api_key: str = ""
     voyage_embedding_model: str = "voyage-3.5"

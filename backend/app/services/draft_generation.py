@@ -18,11 +18,9 @@ from app.models.email_message import EmailMessage
 from app.models.enums import TypKategorie
 from app.models.product import Product
 from app.services.email_text import strip_quoted_reply
-from app.services.llm_client import get_anthropic_client
+from app.services.llm_client import call_tool, coerce_str, get_anthropic_client
 from app.services.product_search import format_products_for_prompt, search_products
 from app.services.token_metrics import log_prompt_breakdown
-
-settings = get_settings()
 
 _DRAFT_TOOL = {
     "name": "generate_reply_draft",
@@ -149,23 +147,20 @@ async def generate_draft(
         f"{product_context_block}"
     )
 
-    response = await client.messages.create(
-        model=settings.anthropic_model,
+    # Retry policy and forced-tool extraction live in llm_client.
+    data, response = await call_tool(
+        client,
+        call="generate_draft",
+        model=get_settings().anthropic_model,
         max_tokens=1500,
-        # See classification.py for the caching rationale/tradeoffs - same
-        # pattern here. This system+tool prefix (~350-400 tokens) is below
-        # Sonnet's 1024-token cacheable minimum today, so it's a no-op right
-        # now rather than a current saving; it activates automatically if
-        # this prompt grows later.
-        system=[{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        tools=[_DRAFT_TOOL],
-        tool_choice={"type": "tool", "name": "generate_reply_draft"},
-        messages=[{"role": "user", "content": user_message}],
+        system=_SYSTEM_PROMPT,
+        tool=_DRAFT_TOOL,
+        user_message=user_message,
     )
 
     log_prompt_breakdown(
         "generate_draft",
-        model=settings.anthropic_model,
+        model=get_settings().anthropic_model,
         system=_SYSTEM_PROMPT,
         tools=[_DRAFT_TOOL],
         mail_content=f"Betreff: {email.subject or ''}\n\n{new_mail_body}",
@@ -174,12 +169,11 @@ async def generate_draft(
         usage=getattr(response, "usage", None),
     )
 
-    tool_use = next((block for block in response.content if getattr(block, "type", None) == "tool_use"), None)
-    if tool_use is None:
-        raise ValueError("Claude hat kein 'generate_reply_draft' Tool-Ergebnis zurückgegeben.")
-    data = tool_use.input
-
-    rag_summary = f"{len(history)} vorherige Mail(s) als Kontext verwendet." if history else "Kein RAG-Kontext verfügbar."
+    rag_summary = (
+        f"{len(history)} vorherige Mail(s) als Kontext verwendet."
+        if history
+        else "Kein RAG-Kontext verfügbar."
+    )
     if email.typ == TypKategorie.ANFRAGE:
         if matched_products:
             names = ", ".join(p.name for p in matched_products)
@@ -187,4 +181,12 @@ async def generate_draft(
         else:
             rag_summary += " Keine passenden Produkte in der Wissensbasis gefunden."
 
-    return data["subject"], data["body"], rag_summary
+    # Both fields are required by the tool schema, but the response is still
+    # untrusted input - a missing body would otherwise KeyError here and
+    # take down the whole poll batch. An empty body is caught by the caller
+    # (see app/services/pipeline.py), which skips draft creation rather than
+    # storing a blank draft for a human to puzzle over.
+    subject = coerce_str(data.get("subject"), max_chars=998) or f"Re: {email.subject or ''}"[:998]
+    body = coerce_str(data.get("body"))
+
+    return subject, body, rag_summary
