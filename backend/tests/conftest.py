@@ -82,3 +82,42 @@ async def db_session(_schema) -> AsyncIterator[AsyncSession]:
         await session.close()
         await transaction.rollback()
         await connection.close()
+
+
+@pytest_asyncio.fixture
+async def api_client(db_session: AsyncSession):
+    """An httpx client wired to the ASGI app, sharing the test's session.
+
+    The app's get_db dependency is overridden so route handlers run inside
+    the same transaction the test does - route commits become SAVEPOINT
+    releases (see db_session above) and everything still rolls back.
+    """
+    import httpx
+
+    from app.api import deps
+    from app.db import get_db
+    from app.main import app
+
+    async def _override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def tenant(db_session: AsyncSession):
+    """The default tenant the API's deps resolve to, plus its user."""
+    from app.models.tenant import Tenant
+    from app.models.user import User
+    from app.config import get_settings
+
+    tenant = Tenant(name="Test", slug=get_settings().default_tenant_slug)
+    db_session.add(tenant)
+    await db_session.flush()
+    db_session.add(User(tenant_id=tenant.id, email="user@example.com", name="Test User"))
+    await db_session.commit()
+    return tenant

@@ -1,6 +1,11 @@
 """Approval workflow: list open drafts, edit, approve (-> sends via Gmail),
 or reject. Sending only ever happens here, after explicit human approval -
 never automatically.
+
+Approval is the one irreversible action in the system: once Gmail accepts
+a message, no amount of local state can un-send it. `approve_draft` is
+therefore written so that every failure mode ends in "not sent" or "sent
+exactly once", never "sent twice" - see the two-phase claim there.
 """
 from __future__ import annotations
 
@@ -27,16 +32,24 @@ from app.services.action_log_service import log_action
 router = APIRouter(prefix="/api/drafts", tags=["drafts"])
 
 
-async def _get_draft_or_404(db: AsyncSession, tenant: Tenant, draft_id: uuid.UUID) -> Draft:
-    result = await db.execute(
-        select(Draft)
-        .where(Draft.id == draft_id, Draft.tenant_id == tenant.id)
-        .options(
-            selectinload(Draft.email_message).selectinload(EmailMessage.contact),
-            selectinload(Draft.email_message).selectinload(EmailMessage.case),
-        )
-    )
-    draft = result.scalar_one_or_none()
+_EMAIL_RELATIONS = (
+    selectinload(Draft.email_message).selectinload(EmailMessage.contact),
+    selectinload(Draft.email_message).selectinload(EmailMessage.case),
+)
+
+
+async def _get_draft_or_404(
+    db: AsyncSession, tenant: Tenant, draft_id: uuid.UUID, *, for_update: bool = False
+) -> Draft:
+    stmt = select(Draft).where(Draft.id == draft_id, Draft.tenant_id == tenant.id)
+    if for_update:
+        # Serialises concurrent approvals of the same draft. The lock is
+        # taken on the Draft row only and held just long enough to claim it
+        # (see approve_draft) - never across the Gmail call.
+        stmt = stmt.with_for_update()
+    stmt = stmt.options(*_EMAIL_RELATIONS)
+
+    draft = (await db.execute(stmt)).scalar_one_or_none()
     if draft is None:
         raise HTTPException(status_code=404, detail="Entwurf nicht gefunden.")
     return draft
@@ -51,10 +64,7 @@ async def list_drafts(
     stmt = (
         select(Draft)
         .where(Draft.tenant_id == tenant.id)
-        .options(
-            selectinload(Draft.email_message).selectinload(EmailMessage.contact),
-            selectinload(Draft.email_message).selectinload(EmailMessage.case),
-        )
+        .options(*_EMAIL_RELATIONS)
         .order_by(Draft.created_at.desc())
     )
     stmt = stmt.where(Draft.status == status) if status else stmt.where(Draft.status == DraftStatus.ENTWURF)
@@ -94,8 +104,11 @@ async def update_draft(
         detail={},
     )
     await db.commit()
-    await db.refresh(draft)
-    return draft
+    # Reload through the same eager options rather than db.refresh():
+    # refresh() expires the email_message relationship, and DraftOut
+    # serialises it, which then lazy-loads inside the async request and
+    # raises MissingGreenlet - a 500 on every successful mutation.
+    return await _get_draft_or_404(db, tenant, draft.id)
 
 
 @router.post("/{draft_id}/approve", response_model=DraftOut)
@@ -105,22 +118,66 @@ async def approve_draft(
     tenant: Tenant = Depends(get_current_tenant),
     user: User = Depends(get_current_user),
 ) -> Draft:
-    draft = await _get_draft_or_404(db, tenant, draft_id)
+    """Sends an approved draft, exactly once.
+
+    Two phases, because sending is irreversible:
+
+    1. Claim. The draft row is locked, checked, moved to FREIGEGEBEN and
+       committed. The lock is released immediately; the claim is durable.
+       A second, concurrent approval now blocks on the lock, then sees a
+       status that is no longer ENTWURF and is rejected - where previously
+       both requests passed the check and the customer got the mail twice.
+    2. Send, then record. Only after Gmail accepts does the draft move to
+       VERSENDET and the mail to ERLEDIGT.
+
+    If the process dies between the two phases the draft stays in
+    FREIGEGEBEN, visible and recoverable by a human. That is the
+    deliberate direction of the trade: a stuck draft can be fixed, a
+    duplicate mail to a customer cannot be un-sent.
+    """
+    draft = await _get_draft_or_404(db, tenant, draft_id, for_update=True)
     if draft.status != DraftStatus.ENTWURF:
-        raise HTTPException(status_code=409, detail="Nur Entwürfe im Status 'entwurf' können freigegeben werden.")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Entwurf ist im Status '{draft.status.value}' - "
+                "nur 'entwurf' kann freigegeben werden."
+            ),
+        )
 
     email = draft.email_message
-    mailbox = await db.get(Mailbox, email.mailbox_id)
+    mailbox = (
+        await db.execute(
+            select(Mailbox).where(
+                Mailbox.id == email.mailbox_id, Mailbox.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one_or_none()
     if mailbox is None:
-        raise HTTPException(status_code=500, detail="Postfach für diese Mail nicht gefunden.")
+        raise HTTPException(status_code=404, detail="Postfach für diese Mail nicht gefunden.")
 
-    service, creds = await gmail_client.get_gmail_service(mailbox)
-    refreshed_fields = gmail_client.encrypted_fields_from_credentials(creds)
-    if refreshed_fields["access_token_encrypted"] != mailbox.access_token_encrypted:
-        for key, value in refreshed_fields.items():
-            setattr(mailbox, key, value)
+    # Phase 1: claim.
+    draft.status = DraftStatus.FREIGEGEBEN
+    draft.approved_by_user_id = user.id
+    draft.approved_at = datetime.now(timezone.utc)
+    await log_action(
+        db,
+        tenant_id=tenant.id,
+        actor=ActionActor.USER,
+        actor_user_id=user.id,
+        entity_type="draft",
+        entity_id=draft.id,
+        action="draft_approved",
+        detail={},
+    )
+    await db.commit()
 
+    # Phase 2: send. Every path from here must leave the draft in a state a
+    # human can act on.
     try:
+        service, creds = await gmail_client.get_gmail_service(mailbox)
+        gmail_client.apply_refreshed_credentials(mailbox, creds)
+
         sent_message_id = await gmail_client.send_reply(
             service,
             to_address=email.sender_address,
@@ -130,16 +187,28 @@ async def approve_draft(
             in_reply_to_rfc822_id=email.rfc822_message_id,
             from_address=mailbox.email_address,
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        # Nothing was sent, so releasing the claim is safe and lets the
+        # user retry. This is also why send_reply must never raise after
+        # Gmail has accepted the message.
+        await db.rollback()
+        draft.status = DraftStatus.ENTWURF
+        draft.approved_by_user_id = None
+        draft.approved_at = None
+        await log_action(
+            db,
+            tenant_id=tenant.id,
+            actor=ActionActor.SYSTEM,
+            entity_type="draft",
+            entity_id=draft.id,
+            action="draft_send_failed",
+            detail={"error_type": type(exc).__name__, "error": str(exc)[:1000]},
+        )
+        await db.commit()
+        raise HTTPException(status_code=502, detail=f"Versand fehlgeschlagen: {exc}") from exc
 
-    now = datetime.now(timezone.utc)
-    draft.approved_by_user_id = user.id
-    draft.approved_at = now
-    draft.sent_at = now
+    draft.sent_at = datetime.now(timezone.utc)
     draft.gmail_sent_message_id = sent_message_id
-    # Sending happens synchronously with approval in this MVP, so the
-    # draft moves straight to the terminal "versendet" state.
     draft.status = DraftStatus.VERSENDET
     email.status = EmailStatus.ERLEDIGT
 
@@ -150,12 +219,15 @@ async def approve_draft(
         actor_user_id=user.id,
         entity_type="draft",
         entity_id=draft.id,
-        action="draft_approved_and_sent",
+        action="draft_sent",
         detail={"gmail_sent_message_id": sent_message_id},
     )
     await db.commit()
-    await db.refresh(draft)
-    return draft
+    # Reload through the same eager options rather than db.refresh():
+    # refresh() expires the email_message relationship, and DraftOut
+    # serialises it, which then lazy-loads inside the async request and
+    # raises MissingGreenlet - a 500 on every successful mutation.
+    return await _get_draft_or_404(db, tenant, draft.id)
 
 
 @router.post("/{draft_id}/reject", response_model=DraftOut)
@@ -184,5 +256,8 @@ async def reject_draft(
         detail={"reason": payload.reason},
     )
     await db.commit()
-    await db.refresh(draft)
-    return draft
+    # Reload through the same eager options rather than db.refresh():
+    # refresh() expires the email_message relationship, and DraftOut
+    # serialises it, which then lazy-loads inside the async request and
+    # raises MissingGreenlet - a 500 on every successful mutation.
+    return await _get_draft_or_404(db, tenant, draft.id)
