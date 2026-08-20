@@ -1,120 +1,178 @@
 """RQ job bodies. RQ itself is synchronous, so each job wraps an async
 implementation with asyncio.run.
+
+The poll job is the system's only unattended entry point: nobody is
+watching it, and everything it touches (Gmail, Claude, Voyage, Postgres)
+can fail transiently or permanently. Its error handling is therefore part
+of the contract, not an afterthought - see `_process_one_message`.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import async_session_factory, engine
+from app.models.enums import ActionActor
 from app.models.mailbox import Mailbox
 from app.services import gmail_client
+from app.services.action_log_service import log_action
 from app.services.pipeline import process_incoming_email
 
 logger = logging.getLogger(__name__)
 
 
-async def _poll_mailbox_async(mailbox_id: str) -> int:
-    processed_count = 0
+@dataclass
+class PollResult:
+    """Outcome of one poll cycle for one mailbox."""
+
+    processed: int = 0
+    already_known: int = 0
+    failed: int = 0
+
+    def __str__(self) -> str:  # shows up in the RQ job result
+        return f"processed={self.processed} known={self.already_known} failed={self.failed}"
+
+
+async def _process_one_message(
+    db: AsyncSession, *, service, mailbox: Mailbox, message_id: str, result: PollResult
+) -> None:
+    """Fetches and processes a single message, absorbing any failure.
+
+    A raised exception here used to abort the entire batch. Because
+    `mailbox.last_synced_at` is only advanced after the loop, the next tick
+    then re-fetched the same messages, failed on the same one again, and
+    did so forever - every mail behind a single unprocessable one was never
+    seen, with no signal beyond a failed RQ job.
+
+    So: one bad message costs that message, and the failure is written to
+    the audit trail where it is visible, rather than costing the mailbox.
+    """
+    try:
+        fetched = await gmail_client.get_message(service, message_id)
+        email = await process_incoming_email(db, mailbox=mailbox, fetched=fetched)
+        if email is None:
+            result.already_known += 1
+        else:
+            result.processed += 1
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+        result.failed += 1
+        logger.exception(
+            "mail_processing_failed mailbox=%s gmail_message_id=%s", mailbox.id, message_id
+        )
+        await db.rollback()
+        await _log_failure(db, mailbox=mailbox, message_id=message_id, exc=exc)
+
+
+async def _log_failure(
+    db: AsyncSession, *, mailbox: Mailbox, message_id: str, exc: Exception
+) -> None:
+    """Records a skipped message in the audit trail.
+
+    Best-effort by design: if even this write fails, the log line above is
+    still the record, and the poll cycle carries on.
+    """
+    try:
+        await log_action(
+            db,
+            tenant_id=mailbox.tenant_id,
+            actor=ActionActor.SYSTEM,
+            entity_type="mailbox",
+            entity_id=mailbox.id,
+            action="mail_processing_failed",
+            detail={
+                "gmail_message_id": message_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:1000],
+            },
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("failure_audit_write_failed mailbox=%s", mailbox.id)
+        await db.rollback()
+
+
+async def _poll_mailbox_async(mailbox_id: str) -> PollResult:
+    result = PollResult()
+
     async with async_session_factory() as db:
         mailbox = await db.get(Mailbox, uuid.UUID(mailbox_id))
         if mailbox is None or not mailbox.is_active:
-            return 0
+            return result
 
         service, creds = await gmail_client.get_gmail_service(mailbox)
 
-        # Persist a rotated access token if the client refreshed it.
-        refreshed_fields = gmail_client.encrypted_fields_from_credentials(creds)
-        if refreshed_fields["access_token_encrypted"] != mailbox.access_token_encrypted:
-            for key, value in refreshed_fields.items():
-                setattr(mailbox, key, value)
+        if gmail_client.apply_refreshed_credentials(mailbox, creds):
             await db.commit()
 
         after_query = None
         if mailbox.last_synced_at is not None:
             after_query = f"after:{int(mailbox.last_synced_at.timestamp())}"
 
-        message_ids = await gmail_client.list_new_message_ids(service, after_query=after_query)
+        message_ids = await gmail_client.list_new_message_ids(
+            service, after_query=after_query, max_results=get_settings().mail_poll_batch_size
+        )
 
         for message_id in message_ids:
-            fetched = await gmail_client.get_message(service, message_id)
-            result = await process_incoming_email(db, mailbox=mailbox, fetched=fetched)
-            if result is not None:
-                processed_count += 1
-            # Commit per message, not once after the whole batch. By this
-            # point process_incoming_email has already spent real Claude
-            # tokens on classify_email (and generate_draft, if
-            # antwort_erforderlich) - only flush()ed, not committed. If a
-            # later message in this batch raises (Gmail API hiccup, a
-            # transient Claude error, ...), the `async with` block below
-            # exits without ever reaching the old end-of-loop commit,
-            # silently discarding every already-processed message in this
-            # run. The idempotency check at the top of
-            # process_incoming_email (SELECT by gmail_message_id) can't
-            # catch that on retry, because the row was never actually
-            # persisted - so the next poll cycle re-fetches and
-            # re-classifies/re-drafts the same mails from scratch,
-            # multiplying token spend on every mailbox with even
-            # occasional transient failures. Committing here means a
-            # mid-batch failure only costs a re-fetch from Gmail for the
-            # remaining messages, never a re-spend of Claude tokens on
-            # mail already processed.
-            await db.commit()
+            # Commit happens per message, not once after the whole batch.
+            # By that point real Claude tokens have been spent on
+            # classification (and draft generation); discarding them on a
+            # later message's failure would mean re-spending them on the
+            # next cycle, because the idempotency check in
+            # process_incoming_email keys on a row that was never persisted.
+            await _process_one_message(
+                db, service=service, mailbox=mailbox, message_id=message_id, result=result
+            )
 
+        # Always advance the watermark, including past messages that failed.
+        # Those are recorded in the audit trail; leaving the watermark back
+        # would retry them forever and block everything behind them.
         mailbox.last_synced_at = datetime.now(timezone.utc)
         await db.commit()
 
-    return processed_count
+    logger.info("mailbox_poll_finished mailbox=%s %s", mailbox_id, result)
+    return result
 
 
-async def _poll_mailbox_and_dispose(mailbox_id: str) -> int:
+async def _run_and_dispose(coro):
+    """Runs an async entry point and disposes the connection pool.
+
+    asyncpg connections are bound to the event loop they were opened on.
+    asyncio.run() tears its loop down on return, so pooled connections
+    would be unusable ("attached to a different loop") the next time this
+    process reuses the module-level `engine`. The scheduler is one
+    long-lived process calling asyncio.run() every tick, which makes this
+    an observed bug rather than a theoretical one.
+    """
     try:
-        return await _poll_mailbox_async(mailbox_id)
+        return await coro
     finally:
-        # asyncpg connections are bound to the event loop they were
-        # opened on. asyncio.run() below tears down its loop when this
-        # call returns, so the pooled connections it opened would be
-        # unusable (and raise "attached to a different loop") the next
-        # time this process reuses the module-level `engine`. Dispose the
-        # pool before the loop closes so the next call starts clean.
-        # Cheap even though RQ normally forks a fresh process per job -
-        # protects a SimpleWorker/--burst deployment too.
         await engine.dispose()
 
 
-def poll_mailbox_job(mailbox_id: str) -> int:
+def poll_mailbox_job(mailbox_id: str) -> str:
     """RQ entrypoint: fetches and processes new mail for one mailbox."""
-    return asyncio.run(_poll_mailbox_and_dispose(mailbox_id))
+    return str(asyncio.run(_run_and_dispose(_poll_mailbox_async(mailbox_id))))
 
 
-async def _poll_all_active_mailboxes_async() -> list[str]:
+async def _list_active_mailbox_ids() -> list[str]:
     async with async_session_factory() as db:
         result = await db.execute(select(Mailbox.id).where(Mailbox.is_active.is_(True)))
         return [str(mid) for mid in result.scalars().all()]
 
 
-async def _list_active_mailboxes_and_dispose() -> list[str]:
-    try:
-        return await _poll_all_active_mailboxes_async()
-    finally:
-        # Same "different loop" hazard as above, but here it's the
-        # observed bug: the scheduler is one long-lived process that
-        # calls asyncio.run() every tick without ever exiting, so this
-        # engine.dispose() runs on essentially every poll cycle.
-        await engine.dispose()
-
-
 def enqueue_poll_for_all_active_mailboxes() -> int:
     """Called by the scheduler on each tick. Enqueues one poll job per
-    connected, active mailbox."""
-    from app.workers.queue import get_queue
+    connected, active mailbox, skipping any mailbox whose previous poll is
+    still queued or running."""
+    from app.workers.queue import enqueue_poll
 
-    mailbox_ids = asyncio.run(_list_active_mailboxes_and_dispose())
-    queue = get_queue()
-    for mailbox_id in mailbox_ids:
-        queue.enqueue(poll_mailbox_job, mailbox_id, job_timeout=300)
-    return len(mailbox_ids)
+    mailbox_ids = asyncio.run(_run_and_dispose(_list_active_mailbox_ids()))
+    return sum(1 for mailbox_id in mailbox_ids if enqueue_poll(mailbox_id) is not None)

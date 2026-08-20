@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # --- Redis / Queue ---
     redis_url: str = "redis://localhost:6379/0"
     mail_poll_interval_seconds: int = 60
+    # How many messages one poll cycle pulls per mailbox. Each costs a
+    # Gmail round-trip plus a Claude call plus an embedding, sequentially,
+    # so this bounds how long a single job can run.
+    mail_poll_batch_size: int = 25
+    mail_poll_job_timeout_seconds: int = 300
 
     # --- Encryption (Fernet key, base64, 32 bytes) for OAuth tokens at rest ---
     token_encryption_key: str = ""

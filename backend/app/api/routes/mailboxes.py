@@ -11,6 +11,7 @@ from app.db import get_db
 from app.models.mailbox import Mailbox
 from app.models.tenant import Tenant
 from app.schemas.mailbox import MailboxOut
+from app.workers.queue import enqueue_poll
 
 router = APIRouter(prefix="/api/mailboxes", tags=["mailboxes"])
 
@@ -36,8 +37,9 @@ async def poll_now(
     if mailbox is None:
         raise HTTPException(status_code=404, detail="Postfach nicht gefunden.")
 
-    from app.workers.queue import get_queue
-    from app.workers.tasks import poll_mailbox_job
-
-    job = get_queue().enqueue(poll_mailbox_job, str(mailbox.id), job_timeout=300)
-    return {"job_id": job.id}
+    job = enqueue_poll(str(mailbox.id))
+    if job is None:
+        # A poll for this mailbox is already queued or running - saying so
+        # is more useful than silently stacking a second one.
+        return {"job_id": None, "status": "already_running"}
+    return {"job_id": job.id, "status": "enqueued"}

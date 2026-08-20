@@ -83,6 +83,24 @@ def encrypted_fields_from_credentials(creds: Credentials) -> dict:
     }
 
 
+def apply_refreshed_credentials(mailbox: Mailbox, creds: Credentials) -> bool:
+    """Writes rotated OAuth tokens back onto the mailbox.
+
+    Returns True if anything changed, so the caller can decide whether a
+    commit is warranted. Both callers (the poll worker and the draft
+    approval endpoint) previously carried their own copy of this
+    compare-then-assign block.
+
+    Does not commit - the caller owns the transaction boundary.
+    """
+    fields = encrypted_fields_from_credentials(creds)
+    if fields["access_token_encrypted"] == mailbox.access_token_encrypted:
+        return False
+    for key, value in fields.items():
+        setattr(mailbox, key, value)
+    return True
+
+
 def _refresh_if_needed(creds: Credentials) -> Credentials:
     if not creds.valid and creds.refresh_token:
         creds.refresh(GoogleAuthRequest())
