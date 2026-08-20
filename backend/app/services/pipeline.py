@@ -20,6 +20,7 @@ from app.models.case import Case, CaseContact
 from app.models.contact import Contact
 from app.models.email_message import EmailMessage
 from app.models.enums import ActionActor, EmailStatus, WichtigkeitsKategorie
+from app.models.limits import fit
 from app.models.mailbox import Mailbox
 from app.services import case_matching, classification, embeddings
 from app.services.action_log_service import log_action
@@ -43,11 +44,15 @@ async def _get_or_create_contact(db: AsyncSession, *, tenant_id, sender_address:
     )
     contact = result.scalar_one_or_none()
     if contact is None:
-        contact = Contact(tenant_id=tenant_id, email_address=sender_address, name=sender_name)
+        contact = Contact(
+            tenant_id=tenant_id,
+            email_address=fit(sender_address, Contact, "email_address"),
+            name=fit(sender_name, Contact, "name"),
+        )
         db.add(contact)
         await db.flush()
     elif sender_name and not contact.name:
-        contact.name = sender_name
+        contact.name = fit(sender_name, Contact, "name")
     return contact
 
 
@@ -66,7 +71,7 @@ async def _get_or_create_case(
         return match.case, False, match.similarity
 
     title = suggested_title or subject or f"Korrespondenz mit {contact.email_address}"
-    case = Case(tenant_id=tenant_id, title=title[:500])
+    case = Case(tenant_id=tenant_id, title=fit(title, Case, "title"))
     db.add(case)
     await db.flush()
     db.add(CaseContact(case_id=case.id, contact_id=contact.id))
@@ -124,14 +129,19 @@ async def process_incoming_email(
         mailbox_id=mailbox.id,
         contact_id=contact.id,
         case_id=case.id,
-        gmail_message_id=fetched.gmail_message_id,
-        gmail_thread_id=fetched.gmail_thread_id,
-        rfc822_message_id=fetched.rfc822_message_id,
-        subject=fetched.subject,
-        sender_address=fetched.sender_address,
-        sender_name=fetched.sender_name,
+        # Header values arrive from the outside world and routinely exceed
+        # the bounds their columns declare (a multi-kilobyte display name is
+        # a standard spam pattern). Unfitted, Postgres raises
+        # StringDataRightTruncation and aborts the batch - see
+        # app/models/limits.py.
+        gmail_message_id=fit(fetched.gmail_message_id, EmailMessage, "gmail_message_id"),
+        gmail_thread_id=fit(fetched.gmail_thread_id, EmailMessage, "gmail_thread_id"),
+        rfc822_message_id=fit(fetched.rfc822_message_id, EmailMessage, "rfc822_message_id"),
+        subject=fit(fetched.subject, EmailMessage, "subject"),
+        sender_address=fit(fetched.sender_address, EmailMessage, "sender_address"),
+        sender_name=fit(fetched.sender_name, EmailMessage, "sender_name"),
         raw_content=fetched.raw_content,
-        snippet=fetched.snippet,
+        snippet=fit(fetched.snippet, EmailMessage, "snippet"),
         wichtigkeits_kategorie=classification_result.wichtigkeits_kategorie,
         typ=classification_result.typ,
         classification_confidence=classification_result.confidence,

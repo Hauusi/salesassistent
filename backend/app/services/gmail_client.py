@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage as PyEmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
+from html import unescape
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -26,13 +29,14 @@ from app.config import get_settings
 from app.models.mailbox import Mailbox
 from app.services import crypto
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 GMAIL_API_SERVICE = "gmail"
 GMAIL_API_VERSION = "v1"
 
 
 def build_oauth_flow(state: str | None = None) -> Flow:
+    settings = get_settings()
     client_config = {
         "web": {
             "client_id": settings.google_client_id,
@@ -49,6 +53,7 @@ def build_oauth_flow(state: str | None = None) -> Flow:
 
 
 def credentials_from_mailbox(mailbox: Mailbox) -> Credentials:
+    settings = get_settings()
     access_token = crypto.decrypt(mailbox.access_token_encrypted) if mailbox.access_token_encrypted else None
     refresh_token = (
         crypto.decrypt(mailbox.refresh_token_encrypted) if mailbox.refresh_token_encrypted else None
@@ -127,6 +132,44 @@ class FetchedEmail:
     attachments: list[FetchedAttachment] = field(default_factory=list)
 
 
+# Script and style blocks carry no readable content, but their bodies are
+# text and survive naive tag stripping - which meant minified CSS and
+# JavaScript from an HTML mail ended up in the prompt we pay Claude for.
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"[ \t]*\n\s*\n\s*", re.MULTILINE)
+
+
+def _decode_body_data(body_data: str) -> str:
+    """Decodes a Gmail base64url body part.
+
+    Returns "" rather than raising on malformed input: a single
+    undecodable part must not abort the poll batch (see
+    app/workers/tasks.py), and an empty body degrades gracefully - the
+    classifier still sees sender and subject.
+    """
+    try:
+        return base64.urlsafe_b64decode(body_data.encode()).decode(errors="replace")
+    except (ValueError, TypeError):
+        logger.warning("gmail_body_part_undecodable len=%s", len(body_data))
+        return ""
+
+
+def _html_to_text(html: str) -> str:
+    """Best-effort HTML to readable text.
+
+    Deliberately dependency-free: this only ever feeds a prompt and the
+    inbox preview, so approximate is fine. It does need to drop script and
+    style bodies and resolve entities, since both otherwise reach the model
+    as billable noise.
+    """
+    without_code = _SCRIPT_STYLE_RE.sub(" ", html)
+    text = _TAG_RE.sub(" ", without_code)
+    text = unescape(text)
+    # Collapse the runs of blank lines that tag removal leaves behind.
+    return _WHITESPACE_RE.sub("\n\n", text).strip()
+
+
 def _extract_plain_text(payload: dict) -> str:
     """Depth-first search for a text/plain part; falls back to text/html
     stripped of tags if no plain-text part exists."""
@@ -134,7 +177,7 @@ def _extract_plain_text(payload: dict) -> str:
     body_data = payload.get("body", {}).get("data")
 
     if mime_type == "text/plain" and body_data:
-        return base64.urlsafe_b64decode(body_data.encode()).decode(errors="replace")
+        return _decode_body_data(body_data)
 
     for part in payload.get("parts", []) or []:
         text = _extract_plain_text(part)
@@ -142,10 +185,7 @@ def _extract_plain_text(payload: dict) -> str:
             return text
 
     if mime_type == "text/html" and body_data:
-        import re
-
-        html = base64.urlsafe_b64decode(body_data.encode()).decode(errors="replace")
-        return re.sub("<[^<]+?>", " ", html)
+        return _html_to_text(_decode_body_data(body_data))
 
     return ""
 
@@ -179,6 +219,23 @@ def _header(headers: list[dict], name: str) -> str | None:
     return None
 
 
+def _unparsable_sender_address(gmail_message_id: str) -> str:
+    """A per-message placeholder for a From header we could not parse.
+
+    A single shared constant here (this used to be "unknown@unknown") makes
+    every such mail collapse onto one Contact row. Case matching then treats
+    them as one person's correspondence history (see
+    app/services/case_matching.py stage 1) and glues unrelated mail into a
+    single Case, which in turn feeds unrelated correspondence into a
+    customer-facing draft as RAG context.
+
+    Keying the placeholder on the Gmail message id keeps each such mail its
+    own contact. `.invalid` is reserved by RFC 2606 and can never resolve,
+    so nothing downstream can accidentally try to deliver to it.
+    """
+    return f"unparsable+{gmail_message_id}@unknown.invalid"
+
+
 def parse_gmail_message(raw: dict) -> FetchedEmail:
     payload = raw.get("payload", {})
     headers = payload.get("headers", [])
@@ -206,7 +263,7 @@ def parse_gmail_message(raw: dict) -> FetchedEmail:
         gmail_thread_id=raw.get("threadId"),
         rfc822_message_id=_header(headers, "Message-ID"),
         subject=_header(headers, "Subject"),
-        sender_address=sender_address or "unknown@unknown",
+        sender_address=sender_address or _unparsable_sender_address(raw["id"]),
         sender_name=sender_name or None,
         raw_content=_extract_plain_text(payload),
         snippet=raw.get("snippet"),
