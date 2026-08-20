@@ -88,6 +88,10 @@ cp .env.example .env
 `.env` ausfüllen:
 
 - `DATABASE_URL` — Standard passt zu `docker-compose.yml`
+- `CORS_ALLOWED_ORIGINS` — nur für Deployments nötig. Leer gelassen, erlaubt
+  die API `FRONTEND_BASE_URL` **und** dessen `localhost`/`127.0.0.1`-Variante;
+  das sind für den Browser verschiedene Origins, und nur eine davon zu
+  erlauben macht die App auf der anderen komplett funktionsunfähig.
 - `TOKEN_ENCRYPTION_KEY` — generieren mit:
   ```bash
   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -235,6 +239,22 @@ nachinstallieren). Anthropic-Aufrufe sind durchgängig gemockt
 - **Nicht gebaut (laut Auftrag bewusst out of scope)**: automatischer
   Versand ohne Freigabe, automatisches Löschen, Outlook/IMAP, vollautomatische
   Angebotserstellung, Follow-up-Reminder/Digest, Mehrsprachigkeits-Logik.
+
+## Demo-Daten (Durchklicken ohne Gmail)
+
+Legt Kontakte, Cases, je eine Mail pro Kategorie, einen Produktkatalog und
+einen offenen Entwurf an — ohne Gmail-Verbindung und ohne einen einzigen
+Token zu verbrauchen. Betrifft nur den Tenant `demo`, echte Daten daneben
+bleiben unberührt.
+
+```bash
+cd backend
+python -m scripts.seed_demo            # anlegen
+python -m scripts.seed_demo --reset    # vorher löschen, dann anlegen
+```
+
+Danach die API mit `DEFAULT_TENANT_SLUG=demo` starten, um die Daten im
+Dashboard zu sehen.
 
 ## Qualitätssicherung
 

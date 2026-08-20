@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     app_secret_key: str = "change-me-in-env"
     api_base_url: str = "http://localhost:8000"
     frontend_base_url: str = "http://localhost:3000"
+    # Browser origins allowed to call the API, comma-separated. Left empty,
+    # it is derived from frontend_base_url plus its localhost/127.0.0.1
+    # sibling - because those are different origins to a browser, and
+    # allowing only one of them makes the app fail completely (and
+    # opaquely, as a bare fetch error) for anyone who opens the other.
+    # Set explicitly for a real deployment, e.g.
+    # CORS_ALLOWED_ORIGINS=https://app.example.com
+    cors_allowed_origins: str = ""
 
     # --- Logging ---
     # text is what a human tailing a terminal wants; json for anything
@@ -145,6 +153,21 @@ class Settings(BaseSettings):
     # Parsed once per Settings instance (which is itself cached), so callers
     # get a ready-made set/list instead of re-splitting a string on every
     # mail.
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        if self.cors_allowed_origins.strip():
+            return [
+                o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()
+            ]
+
+        origins = {self.frontend_base_url.rstrip("/")}
+        # localhost and 127.0.0.1 are the same machine but not the same
+        # origin; during development people use both interchangeably.
+        for a, b in (("localhost", "127.0.0.1"), ("127.0.0.1", "localhost")):
+            if f"//{a}" in self.frontend_base_url:
+                origins.add(self.frontend_base_url.replace(f"//{a}", f"//{b}").rstrip("/"))
+        return sorted(origins)
 
     @property
     def newsletter_bulk_local_parts_set(self) -> frozenset[str]:
