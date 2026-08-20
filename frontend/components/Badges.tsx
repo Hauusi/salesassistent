@@ -1,8 +1,8 @@
 "use client";
 
-import type { Typ, Wichtigkeit } from "@/lib/api";
+import type { CaseStatus, DraftStatus, EmailStatus, Typ, Wichtigkeit } from "@/lib/api";
 import {
-  STATUS_LABELS,
+  statusLabel,
   TYP_LABELS,
   WICHTIGKEIT_CLASS,
   WICHTIGKEIT_LABELS,
@@ -18,6 +18,6 @@ export function TypBadge({ value }: { value: Typ }) {
   return <span className="badge badge-outline">{TYP_LABELS[value]}</span>;
 }
 
-export function StatusBadge({ value }: { value: string }) {
-  return <span className="badge badge-outline">{STATUS_LABELS[value] ?? value}</span>;
+export function StatusBadge({ value }: { value: EmailStatus | DraftStatus | CaseStatus }) {
+  return <span className="badge badge-outline">{statusLabel(value)}</span>;
 }

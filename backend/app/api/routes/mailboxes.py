@@ -10,7 +10,7 @@ from app.api.deps import get_current_tenant
 from app.db import get_db
 from app.models.mailbox import Mailbox
 from app.models.tenant import Tenant
-from app.schemas.mailbox import MailboxOut
+from app.schemas.mailbox import MailboxOut, PollTriggerOut
 from app.workers.queue import enqueue_poll
 
 router = APIRouter(prefix="/api/mailboxes", tags=["mailboxes"])
@@ -24,10 +24,10 @@ async def list_mailboxes(
     return list(result.scalars().all())
 
 
-@router.post("/{mailbox_id}/poll-now", status_code=202)
+@router.post("/{mailbox_id}/poll-now", status_code=202, response_model=PollTriggerOut)
 async def poll_now(
     mailbox_id: uuid.UUID, db: AsyncSession = Depends(get_db), tenant: Tenant = Depends(get_current_tenant)
-) -> dict:
+) -> PollTriggerOut:
     """Manual trigger for local testing, so a developer doesn't have to
     wait for the next scheduler tick to see a test mail come through."""
     result = await db.execute(
@@ -41,5 +41,5 @@ async def poll_now(
     if job is None:
         # A poll for this mailbox is already queued or running - saying so
         # is more useful than silently stacking a second one.
-        return {"job_id": None, "status": "already_running"}
-    return {"job_id": job.id, "status": "enqueued"}
+        return PollTriggerOut(job_id=None, status="already_running")
+    return PollTriggerOut(job_id=job.id, status="enqueued")

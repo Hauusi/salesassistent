@@ -3,13 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from pydantic import BaseModel, Field
 
-from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.common import FreeFormDict, ORMBase
 
 
-class ProductOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class ProductOut(ORMBase):
     id: uuid.UUID
     name: str
     description: str | None
@@ -18,7 +17,7 @@ class ProductOut(BaseModel):
     price: Decimal | None
     currency: str
     availability: str | None
-    specs: dict
+    specs: FreeFormDict
     created_at: datetime
     updated_at: datetime
 
@@ -31,7 +30,7 @@ class ProductCreateIn(BaseModel):
     price: Decimal | None = None
     currency: str = Field(default="EUR", min_length=3, max_length=3)
     availability: str | None = Field(default=None, max_length=255)
-    specs: dict = Field(default_factory=dict)
+    specs: FreeFormDict = Field(default_factory=dict)
 
 
 class ProductUpdateIn(BaseModel):
@@ -46,7 +45,7 @@ class ProductUpdateIn(BaseModel):
     price: Decimal | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     availability: str | None = Field(default=None, max_length=255)
-    specs: dict | None = None
+    specs: FreeFormDict | None = None
 
 
 class ProductImportResult(BaseModel):

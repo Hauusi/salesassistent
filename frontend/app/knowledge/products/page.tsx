@@ -1,50 +1,55 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect } from "react";
-import { api, ApiError, type Product, type ProductInput } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, type Product, type ProductInput } from "@/lib/api";
+import { errorMessage, useApi } from "@/lib/useApi";
+import { AsyncState } from "@/components/AsyncState";
 import ProductForm from "./ProductForm";
 
+function useDebounced<T>(value: T, delayMs = 250): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(handle);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export default function ProductsPage() {
-  const [products, setProducts] = useState<Product[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [editing, setEditing] = useState<Product | null | "new">(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function refresh() {
-    api
-      .listProducts()
-      .then(setProducts)
-      .catch((e: ApiError) => setError(e.message));
-  }
+  const debouncedQuery = useDebounced(query);
 
-  useEffect(refresh, []);
+  // Filtering happens on the server. The page used to call listProducts()
+  // with no arguments and re-filter client-side, which meant the server's
+  // 200-row limit silently truncated the catalog *before* the filter ran -
+  // so with 201 products the search returned wrong results.
+  const { data: products, error, loading, refresh } = useApi(
+    useCallback(
+      () =>
+        api.listProducts({
+          q: debouncedQuery || undefined,
+          category: category || undefined,
+        }),
+      [debouncedQuery, category]
+    ),
+    [debouncedQuery, category]
+  );
 
+  // Categories come from an unfiltered call, so the dropdown does not
+  // shrink to whatever the current filter happens to match.
+  const { data: allProducts } = useApi(useCallback(() => api.listProducts(), []), []);
   const categories = useMemo(() => {
     const set = new Set<string>();
-    for (const p of products ?? []) {
-      if (p.category) set.add(p.category);
-    }
+    for (const p of allProducts ?? []) if (p.category) set.add(p.category);
     return Array.from(set).sort();
-  }, [products]);
-
-  const filtered = useMemo(() => {
-    if (!products) return [];
-    const q = query.trim().toLowerCase();
-    return products.filter((p) => {
-      if (category && p.category !== category) return false;
-      if (!q) return true;
-      return (
-        p.name.toLowerCase().includes(q) ||
-        (p.description ?? "").toLowerCase().includes(q) ||
-        (p.category ?? "").toLowerCase().includes(q) ||
-        (p.sku ?? "").toLowerCase().includes(q)
-      );
-    });
-  }, [products, query, category]);
+  }, [allProducts]);
 
   async function handleCreate(payload: ProductInput) {
     await api.createProduct(payload);
@@ -60,11 +65,12 @@ export default function ProductsPage() {
 
   async function handleDelete(product: Product) {
     if (!confirm(`"${product.name}" wirklich löschen?`)) return;
+    setActionError(null);
     try {
       await api.deleteProduct(product.id);
       refresh();
-    } catch (e) {
-      setError((e as ApiError).message);
+    } catch (cause) {
+      setActionError(errorMessage(cause));
     }
   }
 
@@ -73,17 +79,20 @@ export default function ProductsPage() {
     if (!file) return;
     setImporting(true);
     setImportMessage(null);
-    setError(null);
+    setActionError(null);
     try {
       const result = await api.importProductsCsv(file);
-      setImportMessage(
+      const summary =
         `Import abgeschlossen: ${result.created} neu, ${result.updated} aktualisiert, ` +
-          `${result.skipped} übersprungen` +
-          (result.errors.length ? ` — ${result.errors.length} Hinweis(e): ${result.errors.join(" / ")}` : ".")
+        `${result.skipped} übersprungen`;
+      setImportMessage(
+        result.errors.length
+          ? `${summary} — ${result.errors.length} Hinweis(e): ${result.errors.join(" / ")}`
+          : `${summary}.`
       );
       refresh();
-    } catch (e) {
-      setError((e as ApiError).message);
+    } catch (cause) {
+      setActionError(errorMessage(cause));
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -129,7 +138,11 @@ export default function ProductsPage() {
         />
       </div>
 
-      {error && <div className="error-box" style={{ marginBottom: 16 }}>{error}</div>}
+      {actionError && (
+        <div className="error-box" style={{ marginBottom: 16 }}>
+          {actionError}
+        </div>
+      )}
       {importMessage && (
         <div className="card" style={{ marginBottom: 16 }}>
           {importMessage}
@@ -154,12 +167,12 @@ export default function ProductsPage() {
         />
       )}
 
-      {products === null && !error && <p className="muted">Lade…</p>}
-      {products !== null && filtered.length === 0 && (
-        <div className="empty-state">Keine Produkte gefunden.</div>
-      )}
-
-      {filtered.length > 0 && (
+      <AsyncState
+        loading={loading}
+        error={error}
+        isEmpty={!products?.length}
+        emptyMessage="Keine Produkte gefunden."
+      >
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -173,7 +186,7 @@ export default function ProductsPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => (
+              {products?.map((p) => (
                 <tr key={p.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <td style={{ padding: "8px 10px" }}>
                     <div className="subject">{p.name}</div>
@@ -202,7 +215,7 @@ export default function ProductsPage() {
             </tbody>
           </table>
         </div>
-      )}
+      </AsyncState>
     </div>
   );
 }

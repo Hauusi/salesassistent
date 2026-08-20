@@ -1,20 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, ApiError, type Draft } from "@/lib/api";
-import { WichtigkeitBadge, TypBadge } from "@/components/Badges";
-import { formatDate } from "@/lib/labels";
+import { useCallback } from "react";
+import { api } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import { AsyncState } from "@/components/AsyncState";
+import { EmailListItem } from "@/components/EmailListItem";
 
 export default function DraftsPage() {
-  const [drafts, setDrafts] = useState<Draft[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .listDrafts("entwurf")
-      .then(setDrafts)
-      .catch((e: ApiError) => setError(e.message));
-  }, []);
+  const { data: drafts, error, loading } = useApi(
+    useCallback(() => api.listDrafts("entwurf"), []),
+    []
+  );
 
   return (
     <div>
@@ -24,38 +20,26 @@ export default function DraftsPage() {
         Versand erfolgt erst nach expliziter Freigabe.
       </p>
 
-      {error && <div className="error-box">Fehler beim Laden: {error}</div>}
-
-      {drafts === null && !error && <p className="muted">Lade…</p>}
-
-      {drafts !== null && drafts.length === 0 && (
-        <div className="empty-state">Keine offenen Entwürfe. 🎉</div>
-      )}
-
-      <div className="list">
-        {drafts?.map((draft) => (
-          <a key={draft.id} className="list-item" href={`/drafts/${draft.id}`}>
-            <div className="row-between">
-              <div>
-                <div className="row">
-                  <WichtigkeitBadge value={draft.email_message.wichtigkeits_kategorie} />
-                  <TypBadge value={draft.email_message.typ} />
-                </div>
-                <div className="subject" style={{ marginTop: 6 }}>
-                  {draft.subject || draft.email_message.subject || "(kein Betreff)"}
-                </div>
-                <div className="snippet">
-                  An: {draft.email_message.sender_name || draft.email_message.sender_address}
-                  {draft.email_message.case ? ` · Case: ${draft.email_message.case.title}` : ""}
-                </div>
-              </div>
-              <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-                {formatDate(draft.created_at)}
-              </div>
-            </div>
-          </a>
-        ))}
-      </div>
+      <AsyncState
+        loading={loading}
+        error={error}
+        isEmpty={!drafts?.length}
+        emptyMessage="Keine offenen Entwürfe. 🎉"
+      >
+        <div className="list">
+          {drafts?.map((draft) => (
+            <EmailListItem
+              key={draft.id}
+              email={draft.email_message}
+              href={`/drafts/${draft.id}`}
+              title={draft.subject || draft.email_message.subject}
+              senderPrefix="An: "
+              timestamp={draft.created_at}
+              showStatus={false}
+            />
+          ))}
+        </div>
+      </AsyncState>
     </div>
   );
 }

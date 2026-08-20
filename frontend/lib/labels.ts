@@ -1,4 +1,10 @@
-import type { Typ, Wichtigkeit } from "./api";
+import type {
+  CaseStatus,
+  DraftStatus,
+  EmailStatus,
+  Typ,
+  Wichtigkeit,
+} from "./api";
 
 export const WICHTIGKEIT_LABELS: Record<Wichtigkeit, string> = {
   antwort_erforderlich: "Antwort erforderlich",
@@ -20,17 +26,42 @@ export const TYP_LABELS: Record<Typ, string> = {
   keiner: "-",
 };
 
-export const STATUS_LABELS: Record<string, string> = {
+/**
+ * Status labels, split by the enum they belong to.
+ *
+ * These used to be one `Record<string, string>` mixing email, draft and
+ * case statuses. Because the key type was `string`, adding a value to any
+ * of those enums compiled fine and only showed up at runtime as a raw
+ * `snake_case` string in the UI. Keyed by the real union types, the build
+ * now fails until the label exists.
+ */
+export const EMAIL_STATUS_LABELS: Record<EmailStatus, string> = {
   neu: "Neu",
   abgelegt: "Abgelegt",
   wartet_auf_freigabe: "Wartet auf Freigabe",
   erledigt: "Erledigt",
   ausgeblendet: "Ausgeblendet",
+};
+
+export const DRAFT_STATUS_LABELS: Record<DraftStatus, string> = {
   entwurf: "Entwurf",
-  freigegeben: "Freigegeben",
+  freigegeben: "Wird versendet",
   abgelehnt: "Abgelehnt",
   versendet: "Versendet",
 };
+
+export const CASE_STATUS_LABELS: Record<CaseStatus, string> = {
+  offen: "Offen",
+  geschlossen: "Geschlossen",
+};
+
+export function statusLabel(value: EmailStatus | DraftStatus | CaseStatus): string {
+  return (
+    { ...EMAIL_STATUS_LABELS, ...DRAFT_STATUS_LABELS, ...CASE_STATUS_LABELS }[
+      value
+    ] ?? value
+  );
+}
 
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("de-DE", {

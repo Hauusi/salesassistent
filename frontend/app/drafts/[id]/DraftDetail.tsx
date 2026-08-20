@@ -1,41 +1,55 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, type Draft } from "@/lib/api";
+import { api, type Draft } from "@/lib/api";
+import { errorMessage, useApi } from "@/lib/useApi";
+import { AsyncState } from "@/components/AsyncState";
 import { WichtigkeitBadge, TypBadge, StatusBadge } from "@/components/Badges";
 import { formatDate } from "@/lib/labels";
 
 export default function DraftDetail({ draftId }: { draftId: string }) {
   const router = useRouter();
+  const { data: loaded, error: loadError, loading } = useApi(
+    useCallback(() => api.getDraft(draftId), [draftId]),
+    [draftId]
+  );
+
   const [draft, setDraft] = useState<Draft | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "approve" | "reject" | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
 
-  useEffect(() => {
-    api
-      .getDraft(draftId)
-      .then((d) => {
-        setDraft(d);
-        setSubject(d.subject ?? "");
-        setBody(d.body);
-      })
-      .catch((e: ApiError) => setError(e.message));
-  }, [draftId]);
+  // Seed the editable fields from the loaded draft, using React's
+  // documented "adjust state when a prop changes" pattern rather than an
+  // effect: an effect here would render once with empty inputs and then
+  // again with the real text, which is a visible flash on every open.
+  const [seededFrom, setSeededFrom] = useState<Draft | null>(null);
+  if (loaded && loaded !== seededFrom) {
+    setSeededFrom(loaded);
+    setDraft(loaded);
+    setSubject(loaded.subject ?? "");
+    setBody(loaded.body);
+  }
+
+  /** Saves and returns the stored draft, or throws. */
+  async function save(): Promise<Draft> {
+    const updated = await api.updateDraft(draftId, subject, body);
+    setDraft(updated);
+    return updated;
+  }
 
   async function handleSave() {
     setBusy("save");
-    setError(null);
+    setActionError(null);
     try {
-      const updated = await api.updateDraft(draftId, subject, body);
-      setDraft(updated);
+      await save();
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 2000);
-    } catch (e) {
-      setError((e as ApiError).message);
+    } catch (cause) {
+      setActionError(errorMessage(cause));
     } finally {
       setBusy(null);
     }
@@ -44,13 +58,16 @@ export default function DraftDetail({ draftId }: { draftId: string }) {
   async function handleApprove() {
     if (!confirm("Diese Antwort jetzt freigeben und über Gmail versenden?")) return;
     setBusy("approve");
-    setError(null);
+    setActionError(null);
     try {
-      await handleSave();
-      const updated = await api.approveDraft(draftId);
-      setDraft(updated);
-    } catch (e) {
-      setError((e as ApiError).message);
+      // Save first, and let a failure here stop the send. Previously this
+      // called the error-swallowing handleSave(), so a failed save was
+      // invisible and the draft went out with the *old* text - silently
+      // sending a customer something the user had just edited away.
+      await save();
+      setDraft(await api.approveDraft(draftId));
+    } catch (cause) {
+      setActionError(errorMessage(cause));
     } finally {
       setBusy(null);
     }
@@ -59,19 +76,23 @@ export default function DraftDetail({ draftId }: { draftId: string }) {
   async function handleReject() {
     const reason = prompt("Grund für die Ablehnung (optional):") ?? undefined;
     setBusy("reject");
-    setError(null);
+    setActionError(null);
     try {
-      const updated = await api.rejectDraft(draftId, reason);
-      setDraft(updated);
-    } catch (e) {
-      setError((e as ApiError).message);
+      setDraft(await api.rejectDraft(draftId, reason));
+    } catch (cause) {
+      setActionError(errorMessage(cause));
     } finally {
       setBusy(null);
     }
   }
 
-  if (error && !draft) return <div className="error-box">Fehler: {error}</div>;
-  if (!draft) return <p className="muted">Lade…</p>;
+  if (!draft) {
+    return (
+      <AsyncState loading={loading} error={loadError} isEmpty={false} emptyMessage="">
+        <p className="muted">Lade…</p>
+      </AsyncState>
+    );
+  }
 
   const email = draft.email_message;
   const editable = draft.status === "entwurf";
@@ -90,7 +111,10 @@ export default function DraftDetail({ draftId }: { draftId: string }) {
 
       <h1 className="page-title">{email.subject || "(kein Betreff)"}</h1>
       <p className="page-subtitle">
-        Von {email.sender_name ? `${email.sender_name} <${email.sender_address}>` : email.sender_address}
+        Von{" "}
+        {email.sender_name
+          ? `${email.sender_name} <${email.sender_address}>`
+          : email.sender_address}
         {" · "}
         {formatDate(email.received_at)}
         {email.case ? ` · Case: ${email.case.title}` : ""}
@@ -101,7 +125,11 @@ export default function DraftDetail({ draftId }: { draftId: string }) {
         <div className="quote-block">{email.snippet}</div>
       </div>
 
-      {error && <div className="error-box" style={{ marginBottom: 16 }}>{error}</div>}
+      {actionError && (
+        <div className="error-box" style={{ marginBottom: 16 }}>
+          {actionError}
+        </div>
+      )}
 
       {draft.rag_context_summary && (
         <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
@@ -144,8 +172,11 @@ export default function DraftDetail({ draftId }: { draftId: string }) {
         </div>
       ) : (
         <p className="muted" style={{ marginTop: 20 }}>
-          {draft.status === "versendet" && `Versendet am ${draft.sent_at ? formatDate(draft.sent_at) : ""}.`}
+          {draft.status === "versendet" &&
+            `Versendet am ${draft.sent_at ? formatDate(draft.sent_at) : ""}.`}
           {draft.status === "abgelehnt" && "Dieser Entwurf wurde abgelehnt."}
+          {draft.status === "freigegeben" &&
+            "Freigegeben - der Versand läuft. Falls dieser Status bestehen bleibt, ist der Versand abgebrochen; bitte prüfen."}
         </p>
       )}
     </div>

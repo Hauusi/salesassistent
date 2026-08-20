@@ -1,35 +1,39 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { api, ApiError, type EmailMessage } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, type EmailMessage } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import { AsyncState } from "@/components/AsyncState";
 import { formatDate } from "@/lib/labels";
 
 type GroupBy = "case" | "contact";
 
+/** Debounces a value, so typing does not fire a request per keystroke. */
+function useDebounced<T>(value: T, delayMs = 250): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(handle);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export default function KnowledgePage() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<EmailMessage[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>("case");
+  const debouncedQuery = useDebounced(query);
 
-  useEffect(() => {
-    const handle = setTimeout(() => {
-      api
-        .searchKnowledge(query || undefined)
-        .then(setResults)
-        .catch((e: ApiError) => setError(e.message));
-    }, 250);
-    return () => clearTimeout(handle);
-  }, [query]);
+  const { data: results, error, loading } = useApi(
+    useCallback(() => api.searchKnowledge(debouncedQuery || undefined), [debouncedQuery]),
+    [debouncedQuery]
+  );
 
   const groups = useMemo(() => {
     if (!results) return [];
     const map = new Map<string, { label: string; items: EmailMessage[] }>();
     for (const email of results) {
       const key =
-        groupBy === "case"
-          ? email.case?.id ?? "none"
-          : email.contact?.id ?? "none";
+        groupBy === "case" ? email.case?.id ?? "none" : email.contact?.id ?? "none";
       const label =
         groupBy === "case"
           ? email.case?.title ?? "(kein Case)"
@@ -37,7 +41,7 @@ export default function KnowledgePage() {
       if (!map.has(key)) map.set(key, { label, items: [] });
       map.get(key)!.items.push(email);
     }
-    return Array.from(map.values());
+    return Array.from(map.entries()).map(([key, group]) => ({ key, ...group }));
   }, [results, groupBy]);
 
   return (
@@ -62,34 +66,37 @@ export default function KnowledgePage() {
         </select>
       </div>
 
-      {error && <div className="error-box">Fehler bei der Suche: {error}</div>}
-      {results === null && !error && <p className="muted">Lade…</p>}
-      {results !== null && results.length === 0 && (
-        <div className="empty-state">Keine Treffer.</div>
-      )}
-
-      {groups.map((group) => (
-        <div key={group.label} style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 8 }}>
-            {group.label} ({group.items.length})
-          </h3>
-          <div className="list">
-            {group.items.map((email) => (
-              <a key={email.id} className="list-item" href={`/inbox/${email.id}`}>
-                <div className="row-between">
-                  <div>
-                    <div className="subject">{email.subject || "(kein Betreff)"}</div>
-                    <div className="snippet">{email.snippet}</div>
+      <AsyncState
+        loading={loading}
+        error={error}
+        isEmpty={!results?.length}
+        emptyMessage="Keine Treffer."
+      >
+        {groups.map((group) => (
+          // Keyed by id, not label: two different cases can share a title,
+          // and duplicate React keys drop rows from the render.
+          <div key={group.key} style={{ marginBottom: 24 }}>
+            <h3 style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 8 }}>
+              {group.label} ({group.items.length})
+            </h3>
+            <div className="list">
+              {group.items.map((email) => (
+                <a key={email.id} className="list-item" href={`/inbox/${email.id}`}>
+                  <div className="row-between">
+                    <div>
+                      <div className="subject">{email.subject || "(kein Betreff)"}</div>
+                      <div className="snippet">{email.snippet}</div>
+                    </div>
+                    <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
+                      {formatDate(email.received_at)}
+                    </div>
                   </div>
-                  <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-                    {formatDate(email.received_at)}
-                  </div>
-                </div>
-              </a>
-            ))}
+                </a>
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </AsyncState>
     </div>
   );
 }

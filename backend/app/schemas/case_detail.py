@@ -3,19 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-
-from app.schemas.common import ContactOut
+from app.models.enums import CaseStatus
+from app.schemas.common import ContactOut, ORMBase
 from app.schemas.email import EmailOut
 
 
-class CaseListItemOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class CaseListItemOut(ORMBase):
     id: uuid.UUID
     title: str
     summary: str | None
-    status: str
+    status: CaseStatus
     created_at: datetime
     contacts: list[ContactOut] = []
     email_count: int = 0

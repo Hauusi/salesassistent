@@ -3,35 +3,19 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, Field
 
-from app.schemas.common import CaseOut, ContactOut
-
-
-class EmailSummaryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    subject: str | None
-    sender_address: str
-    sender_name: str | None
-    snippet: str | None
-    received_at: datetime
-    wichtigkeits_kategorie: str | None
-    typ: str
-    status: str
-    contact: ContactOut | None
-    case: CaseOut | None
+from app.models.enums import DraftStatus
+from app.schemas.common import ORMBase
+from app.schemas.email import EmailSummaryOut
 
 
-class DraftOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class DraftOut(ORMBase):
     id: uuid.UUID
     email_message_id: uuid.UUID
     subject: str | None
     body: str
-    status: str
+    status: DraftStatus
     rag_context_summary: str | None
     created_at: datetime
     updated_at: datetime
@@ -40,9 +24,9 @@ class DraftOut(BaseModel):
 
 
 class DraftUpdateIn(BaseModel):
-    subject: str | None = None
+    subject: str | None = Field(default=None, max_length=998)
     body: str
 
 
 class DraftRejectIn(BaseModel):
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=2000)

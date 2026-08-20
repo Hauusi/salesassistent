@@ -1,22 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, type CaseDetail as CaseDetailType } from "@/lib/api";
-import { WichtigkeitBadge, TypBadge, StatusBadge } from "@/components/Badges";
-import { formatDate } from "@/lib/labels";
+import { api } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import { AsyncState } from "@/components/AsyncState";
+import { EmailListItem } from "@/components/EmailListItem";
 
 export default function CaseDetail({ caseId }: { caseId: string }) {
   const router = useRouter();
-  const [caseData, setCaseData] = useState<CaseDetailType | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.getCase(caseId).then(setCaseData).catch((e: ApiError) => setError(e.message));
-  }, [caseId]);
-
-  if (error) return <div className="error-box">Fehler: {error}</div>;
-  if (!caseData) return <p className="muted">Lade…</p>;
+  const { data: caseData, error, loading } = useApi(
+    useCallback(() => api.getCase(caseId), [caseId]),
+    [caseId]
+  );
 
   return (
     <div>
@@ -24,35 +20,30 @@ export default function CaseDetail({ caseId }: { caseId: string }) {
         ← Zurück zu Cases
       </button>
 
-      <h1 className="page-title">{caseData.title}</h1>
-      <p className="page-subtitle">
-        {caseData.contacts.map((c) => c.name || c.email_address).join(", ") || "Keine Kontakte"}
-        {" · "}
-        {caseData.emails.length} Mail(s)
-      </p>
+      <AsyncState
+        loading={loading}
+        error={error}
+        isEmpty={false}
+        emptyMessage=""
+      >
+        {caseData && (
+          <>
+            <h1 className="page-title">{caseData.title}</h1>
+            <p className="page-subtitle">
+              {caseData.contacts.map((c) => c.name || c.email_address).join(", ") ||
+                "Keine Kontakte"}
+              {" · "}
+              {caseData.emails.length} Mail(s)
+            </p>
 
-      <div className="list">
-        {caseData.emails.map((email) => (
-          <a key={email.id} className="list-item" href={`/inbox/${email.id}`}>
-            <div className="row-between">
-              <div>
-                <div className="row">
-                  <WichtigkeitBadge value={email.wichtigkeits_kategorie} />
-                  <TypBadge value={email.typ} />
-                  <StatusBadge value={email.status} />
-                </div>
-                <div className="subject" style={{ marginTop: 6 }}>
-                  {email.subject || "(kein Betreff)"}
-                </div>
-                <div className="snippet">{email.sender_name || email.sender_address}</div>
-              </div>
-              <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-                {formatDate(email.received_at)}
-              </div>
+            <div className="list">
+              {caseData.emails.map((email) => (
+                <EmailListItem key={email.id} email={email} href={`/inbox/${email.id}`} />
+              ))}
             </div>
-          </a>
-        ))}
-      </div>
+          </>
+        )}
+      </AsyncState>
     </div>
   );
 }
