@@ -15,7 +15,6 @@ class Settings(BaseSettings):
 
     # --- App ---
     app_env: str = "development"
-    app_secret_key: str = "change-me-in-env"
     api_base_url: str = "http://localhost:8000"
     frontend_base_url: str = "http://localhost:3000"
     # Browser origins allowed to call the API, comma-separated. Left empty,

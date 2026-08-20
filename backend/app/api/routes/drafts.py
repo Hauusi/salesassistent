@@ -208,7 +208,14 @@ async def approve_draft(
             detail={"error_type": type(exc).__name__, "error": str(exc)[:1000]},
         )
         await db.commit()
-        raise HTTPException(status_code=502, detail=f"Versand fehlgeschlagen: {exc}") from exc
+        # The full provider error goes to the audit trail and the log, not
+        # to the client: a Gmail HttpError body can carry internal URLs,
+        # project identifiers and quota details, and this API has no
+        # authentication in front of it.
+        raise HTTPException(
+            status_code=502,
+            detail="Versand über Gmail fehlgeschlagen. Details siehe Protokoll.",
+        ) from exc
 
     draft.sent_at = datetime.now(UTC)
     draft.gmail_sent_message_id = sent_message_id

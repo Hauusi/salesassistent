@@ -278,6 +278,15 @@ nicht von Hand bearbeiten. Nach einer Änderung an einem Response-Schema
 
 ## Sicherheit
 
+> **Wichtig: Es gibt keine Authentifizierung.** Das ist bewusster
+> MVP-Scope (siehe "Offene Punkte"), hat aber eine konkrete Konsequenz:
+> Wer die API erreichen kann, kann alle Mails lesen, Entwürfe ändern und
+> **im Namen des verbundenen Postfachs Mails versenden**. Die API darf
+> deshalb nicht öffentlich erreichbar sein — nur localhost, VPN oder ein
+> vorgelagerter Reverse-Proxy mit eigener Authentifizierung.
+
+
+
 - OAuth-Tokens: verschlüsselt (Fernet), nie im Klartext.
 - Keine Zugangsdaten im Code — alles über `.env` / Umgebungsvariablen,
   `.env.example` als Referenz gepflegt.
