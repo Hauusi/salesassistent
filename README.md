@@ -139,13 +139,21 @@ Dashboard: [http://localhost:3000](http://localhost:3000)
 
 ```bash
 cp backend/.env.example backend/.env      # ausfüllen, siehe oben
-cp frontend/.env.local.example frontend/.env.local
 docker compose up --build
 ```
 
 Startet Postgres, Redis, Backend, Worker, Scheduler und Frontend zusammen.
-Migrationen müssen einmalig separat laufen:
-`docker compose exec backend alembic upgrade head`
+Die Migrationen laufen automatisch: ein eigener `migrate`-Service führt
+`alembic upgrade head` aus, und Backend, Worker und Scheduler starten erst,
+wenn er erfolgreich durchgelaufen ist.
+
+Die API-URL des Frontends wird zur **Build**-Zeit ins Bundle geschrieben
+(so funktioniert `NEXT_PUBLIC_*`), nicht zur Laufzeit gelesen. Für ein
+anderes Deployment:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=https://api.example.com docker compose build frontend
+```
 
 ## 5. End-to-End durchspielen (Abnahmekriterium)
 
@@ -210,9 +218,10 @@ nachinstallieren). Anthropic-Aufrufe sind durchgängig gemockt
 - **Gmail Push/Pub-Sub**: Nicht implementiert — Polling reicht für den
   MVP-Start (Intervall über `MAIL_POLL_INTERVAL_SECONDS`). Der
   Umstieg auf Push würde primär `app/workers/` betreffen.
-- **Anhänge**: Metadaten (Dateiname, Typ, Größe) werden erfasst, der
-  Anhang-Inhalt selbst wird noch nicht in einem Objektspeicher abgelegt
-  (`Attachment.storage_path` ist vorbereitet).
+- **Anhänge**: Metadaten (Dateiname, Typ, Größe, Gmail-Attachment-ID)
+  werden beim Verarbeiten in `attachments` gespeichert; der Anhang-Inhalt
+  selbst wird noch nicht in einem Objektspeicher abgelegt
+  (`Attachment.storage_path` ist dafür vorbereitet).
 - **Nicht gebaut (laut Auftrag bewusst out of scope)**: automatischer
   Versand ohne Freigabe, automatisches Löschen, Outlook/IMAP, vollautomatische
   Angebotserstellung, Follow-up-Reminder/Digest, Mehrsprachigkeits-Logik.

@@ -27,3 +27,7 @@ npm-debug.log*
 # IDE
 .vscode/
 .idea/
+
+# Next.js build output
+frontend/.next/
+frontend/out/

@@ -1,4 +1,21 @@
-version: "3.9"
+# Full stack: Postgres(pgvector) + Redis + backend + worker + scheduler + frontend.
+#
+# `docker compose up --build` is expected to produce a working system with
+# no manual follow-up: the backend applies migrations before it serves, and
+# the worker and scheduler wait for it to have done so. Previously neither
+# was true - the frontend had no Dockerfile at all, and nothing ever ran
+# `alembic upgrade head`, so the API came up against an empty schema.
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/salesassistent
+  REDIS_URL: redis://redis:6379/0
+
+x-backend-build: &backend-build
+  build: ./backend
+  restart: unless-stopped
+  env_file:
+    - ./backend/.env
+  environment: *backend-env
 
 services:
   postgres:
@@ -29,14 +46,19 @@ services:
       timeout: 5s
       retries: 10
 
+  # Runs the migrations once and exits. Everything else waits for it to
+  # finish successfully, so no service can come up against a schema that
+  # does not exist yet.
+  migrate:
+    <<: *backend-build
+    restart: "no"
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
-    build: ./backend
-    restart: unless-stopped
-    env_file:
-      - ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/salesassistent
-      REDIS_URL: redis://redis:6379/0
+    <<: *backend-build
     ports:
       - "8000:8000"
     depends_on:
@@ -44,56 +66,50 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   worker:
-    build: ./backend
-    restart: unless-stopped
+    <<: *backend-build
     command: python -m app.workers.run_worker
-    env_file:
-      - ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/salesassistent
-      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
+      migrate:
+        condition: service_completed_successfully
 
   scheduler:
-    build: ./backend
-    restart: unless-stopped
+    <<: *backend-build
     command: python -m app.workers.run_scheduler
-    env_file:
-      - ./backend/.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/salesassistent
-      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
+      migrate:
+        condition: service_completed_successfully
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle at build time - it is the browser
+        # that calls this URL, so it must be reachable from the host, not
+        # from inside the compose network.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped
-    env_file:
-      - ./frontend/.env.local
     ports:
       - "3000:3000"
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
 
 volumes:
   pgdata:
