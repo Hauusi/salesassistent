@@ -146,6 +146,15 @@ class Settings(BaseSettings):
     # --- Single-tenant MVP bootstrap ---
     default_tenant_slug: str = "default"
 
+    # --- Contacts / follow-up ---
+    # A contact is flagged "follow-up nötig" when their most recent inquiry
+    # is still open/unanswered and older than this many days. No canonical
+    # value is given in the concept doc, so - like case_similarity_threshold
+    # above - this is a documented, configurable default rather than a
+    # guess baked into the code. Overridable per-request via the
+    # `followup_days` query param on /api/contacts.
+    contact_followup_threshold_days: int = 5
+
 
     # --- Derived views on the comma-separated settings above -------------
     #
