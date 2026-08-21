@@ -231,6 +231,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Contacts */
+        get: operations["list_contacts_api_contacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/contacts/{contact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Contact */
+        get: operations["get_contact_api_contacts__contact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/knowledge/search": {
         parameters: {
             query?: never;
@@ -399,6 +433,60 @@ export interface components {
          * @enum {string}
          */
         CaseStatus: "offen" | "geschlossen";
+        /** ContactDetailOut */
+        ContactDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string | null;
+            /** Email Address */
+            email_address: string;
+            /** Company */
+            company: string | null;
+            /** Total Inquiries */
+            total_inquiries: number;
+            last_status: components["schemas"]["ContactLastStatus"] | null;
+            /** Last Contact At */
+            last_contact_at: string | null;
+            /** Needs Followup */
+            needs_followup: boolean;
+            /** Emails */
+            emails: components["schemas"]["EmailSummaryOut"][];
+        };
+        /**
+         * ContactLastStatus
+         * @description The three-value status a contact overview needs - derived at
+         *     request time, never persisted (see routes/contacts.py:_last_status).
+         *
+         *     It combines two things that are stored separately: EmailStatus (was the
+         *     latest inquiry answered?) and CaseStatus (was its case closed?).
+         * @enum {string}
+         */
+        ContactLastStatus: "offen" | "beantwortet" | "abgeschlossen";
+        /** ContactListItemOut */
+        ContactListItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string | null;
+            /** Email Address */
+            email_address: string;
+            /** Company */
+            company: string | null;
+            /** Total Inquiries */
+            total_inquiries: number;
+            last_status: components["schemas"]["ContactLastStatus"] | null;
+            /** Last Contact At */
+            last_contact_at: string | null;
+            /** Needs Followup */
+            needs_followup: boolean;
+        };
         /** ContactOut */
         ContactOut: {
             /**
@@ -1050,6 +1138,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_contacts_api_contacts_get: {
+        parameters: {
+            query?: {
+                /** @description Overrides the follow-up threshold (days) for this request only. Defaults to the configured contact_followup_threshold_days setting. */
+                followup_days?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactListItemOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_api_contacts__contact_id__get: {
+        parameters: {
+            query?: {
+                followup_days?: number | null;
+            };
+            header?: never;
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactDetailOut"];
                 };
             };
             /** @description Validation Error */

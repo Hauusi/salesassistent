@@ -572,6 +572,122 @@
         }
       }
     },
+    "/api/contacts": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "List Contacts",
+        "operationId": "list_contacts_api_contacts_get",
+        "parameters": [
+          {
+            "name": "followup_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Overrides the follow-up threshold (days) for this request only. Defaults to the configured contact_followup_threshold_days setting.",
+              "title": "Followup Days"
+            },
+            "description": "Overrides the follow-up threshold (days) for this request only. Defaults to the configured contact_followup_threshold_days setting."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContactListItemOut"
+                  },
+                  "title": "Response List Contacts Api Contacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/contacts/{contact_id}": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Get Contact",
+        "operationId": "get_contact_api_contacts__contact_id__get",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "followup_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Followup Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/knowledge/search": {
       "get": {
         "tags": [
@@ -1115,6 +1231,178 @@
           "geschlossen"
         ],
         "title": "CaseStatus"
+      },
+      "ContactDetailOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "email_address": {
+            "type": "string",
+            "title": "Email Address"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "total_inquiries": {
+            "type": "integer",
+            "title": "Total Inquiries"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContactLastStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_contact_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Contact At"
+          },
+          "needs_followup": {
+            "type": "boolean",
+            "title": "Needs Followup"
+          },
+          "emails": {
+            "items": {
+              "$ref": "#/components/schemas/EmailSummaryOut"
+            },
+            "type": "array",
+            "title": "Emails"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email_address",
+          "company",
+          "total_inquiries",
+          "last_status",
+          "last_contact_at",
+          "needs_followup",
+          "emails"
+        ],
+        "title": "ContactDetailOut"
+      },
+      "ContactLastStatus": {
+        "type": "string",
+        "enum": [
+          "offen",
+          "beantwortet",
+          "abgeschlossen"
+        ],
+        "title": "ContactLastStatus",
+        "description": "The three-value status a contact overview needs - derived at\nrequest time, never persisted (see routes/contacts.py:_last_status).\n\nIt combines two things that are stored separately: EmailStatus (was the\nlatest inquiry answered?) and CaseStatus (was its case closed?)."
+      },
+      "ContactListItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "email_address": {
+            "type": "string",
+            "title": "Email Address"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "total_inquiries": {
+            "type": "integer",
+            "title": "Total Inquiries"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContactLastStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_contact_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Contact At"
+          },
+          "needs_followup": {
+            "type": "boolean",
+            "title": "Needs Followup"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email_address",
+          "company",
+          "total_inquiries",
+          "last_status",
+          "last_contact_at",
+          "needs_followup"
+        ],
+        "title": "ContactListItemOut"
       },
       "ContactOut": {
         "properties": {
