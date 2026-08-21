@@ -32,6 +32,9 @@ export type DraftStatus = Schemas["DraftStatus"];
 export type CaseStatus = Schemas["CaseStatus"];
 
 export type Contact = Schemas["ContactOut"];
+export type ContactLastStatus = Schemas["ContactLastStatus"];
+export type ContactListItem = Schemas["ContactListItemOut"];
+export type ContactDetail = Schemas["ContactDetailOut"];
 export type Case = Schemas["CaseOut"];
 export type CaseListItem = Schemas["CaseListItemOut"];
 export type CaseDetail = Schemas["CaseDetailOut"];
@@ -142,6 +145,19 @@ export const api = {
 
   listCases: () => request<CaseListItem[]>("/api/cases"),
   getCase: (id: string) => request<CaseDetail>(`/api/cases/${id}`),
+
+  listContacts: (params?: { followup_days?: number }) =>
+    request<ContactListItem[]>(
+      `/api/contacts${queryString({
+        followup_days: params?.followup_days?.toString(),
+      })}`
+    ),
+  getContact: (id: string, params?: { followup_days?: number }) =>
+    request<ContactDetail>(
+      `/api/contacts/${id}${queryString({
+        followup_days: params?.followup_days?.toString(),
+      })}`
+    ),
 
   searchKnowledge: (q?: string) =>
     request<EmailMessage[]>(`/api/knowledge/search${queryString({ q })}`),

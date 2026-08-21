@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/inbox", label: "Posteingang" },
   { href: "/knowledge", label: "Wissensbasis" },
   { href: "/cases", label: "Cases" },
+  { href: "/contacts", label: "Kontakte" },
   { href: "/connect", label: "Postfach verbinden" },
 ];
 

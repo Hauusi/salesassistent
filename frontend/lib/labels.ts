@@ -1,5 +1,6 @@
 import type {
   CaseStatus,
+  ContactLastStatus,
   DraftStatus,
   EmailStatus,
   Typ,
@@ -55,11 +56,30 @@ export const CASE_STATUS_LABELS: Record<CaseStatus, string> = {
   geschlossen: "Geschlossen",
 };
 
-export function statusLabel(value: EmailStatus | DraftStatus | CaseStatus): string {
+/** Status of a contact's most recent inquiry - see ContactLastStatus in the
+ * backend (derived from EmailStatus + CaseStatus, not a stored field). */
+export const CONTACT_STATUS_LABELS: Record<ContactLastStatus, string> = {
+  offen: "Offen",
+  beantwortet: "Beantwortet",
+  abgeschlossen: "Abgeschlossen",
+};
+
+export const CONTACT_STATUS_CLASS: Record<ContactLastStatus, string> = {
+  offen: "badge badge-warn",
+  beantwortet: "badge badge-success",
+  abgeschlossen: "badge badge-muted",
+};
+
+export function statusLabel(
+  value: EmailStatus | DraftStatus | CaseStatus | ContactLastStatus
+): string {
   return (
-    { ...EMAIL_STATUS_LABELS, ...DRAFT_STATUS_LABELS, ...CASE_STATUS_LABELS }[
-      value
-    ] ?? value
+    {
+      ...EMAIL_STATUS_LABELS,
+      ...DRAFT_STATUS_LABELS,
+      ...CASE_STATUS_LABELS,
+      ...CONTACT_STATUS_LABELS,
+    }[value] ?? value
   );
 }
 
