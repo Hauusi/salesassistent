@@ -9,9 +9,11 @@ commit: a failed job plus Claude tokens paid twice.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
+from rq.job import JobStatus
 
 from app.workers import queue as queue_module
 
@@ -70,6 +72,50 @@ def test_enqueue_poll_is_possible_again_once_the_job_is_gone(clean_queue) -> Non
     first.delete()
 
     assert queue_module.enqueue_poll(mailbox_id) is not None
+
+
+def _mark_started(job, *, started_at) -> None:
+    """Simulates a job the work horse picked up but never finished, without
+    actually running one - the crash scenario under test is precisely that
+    nothing ever gets the chance to move the job past "started"."""
+    job.set_status(JobStatus.STARTED)
+    job.started_at = started_at
+    job.save()
+
+
+def test_a_hung_started_job_past_its_timeout_no_longer_blocks_polling(clean_queue) -> None:
+    """Regression: if the worker process itself dies (OOM, host crash,
+    kill -9) - not just the job - nobody is left to ever mark the job
+    failed. Before this fix, the mailbox's poll stayed 'already in flight'
+    in Redis forever, and no future tick would ever enqueue it again."""
+    mailbox_id = str(uuid.uuid4())
+    job = queue_module.enqueue_poll(mailbox_id)
+    assert job is not None
+
+    ancient = datetime.utcnow() - timedelta(
+        seconds=job.timeout + queue_module._STALE_STARTED_GRACE_SECONDS + 1
+    )
+    _mark_started(job, started_at=ancient)
+
+    assert queue_module.is_poll_in_flight(mailbox_id) is False
+    # Cleaned up, not just ignored - it must not keep silently piling up.
+    assert queue_module.Job.exists(job.id, connection=queue_module.get_redis()) is False
+
+    again = queue_module.enqueue_poll(mailbox_id)
+    assert again is not None, "a stale started job must not block re-enqueueing forever"
+
+
+def test_a_recently_started_job_still_counts_as_in_flight(clean_queue) -> None:
+    """A job that is merely slow - not stuck - must still be respected;
+    only staleness well past its own timeout should trigger cleanup."""
+    mailbox_id = str(uuid.uuid4())
+    job = queue_module.enqueue_poll(mailbox_id)
+    assert job is not None
+
+    _mark_started(job, started_at=datetime.utcnow())
+
+    assert queue_module.is_poll_in_flight(mailbox_id) is True
+    assert queue_module.enqueue_poll(mailbox_id) is None
 
 
 def test_enqueued_poll_carries_a_retry_policy(clean_queue) -> None:

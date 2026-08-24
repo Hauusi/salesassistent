@@ -143,15 +143,29 @@ async def _poll_mailbox_async(mailbox_id: str) -> PollResult:
 
 
 async def _run_and_dispose(coro):
-    """Runs an async entry point and disposes the connection pool.
+    """Runs an async entry point on a clean connection pool and disposes it
+    again afterwards.
 
     asyncpg connections are bound to the event loop they were opened on.
-    asyncio.run() tears its loop down on return, so pooled connections
-    would be unusable ("attached to a different loop") the next time this
-    process reuses the module-level `engine`. The scheduler is one
-    long-lived process calling asyncio.run() every tick, which makes this
-    an observed bug rather than a theoretical one.
+    asyncio.run() tears its loop down on return, so any connection left in
+    the module-level `engine`'s pool is unusable the next time this process
+    reuses `engine` - the checkout raises MissingGreenlet ("attached to a
+    different loop") deep inside pool_pre_ping, on the very first query.
+    The scheduler is one long-lived process calling asyncio.run() every
+    tick, which makes this an observed bug rather than a theoretical one -
+    and the same is true of an RQ worker that does not fork a fresh process
+    per job (SimpleWorker, or forking disabled), or of a job that runs right
+    after a crash skipped the previous run's cleanup.
+
+    Disposing only *after* the run (the previous fix here) protects the
+    *next* call but not this one: if this process's engine already carries
+    connections from an earlier loop - the scheduler's previous tick, a
+    prior job, a crash that never reached this `finally` - the very first
+    checkout in `coro` inherits them. Disposing before as well guarantees
+    every run starts with an empty pool, regardless of what happened
+    earlier in this process.
     """
+    await engine.dispose()
     try:
         return await coro
     finally:
