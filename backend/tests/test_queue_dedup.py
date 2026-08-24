@@ -8,6 +8,8 @@ commit: a failed job plus Claude tokens paid twice.
 """
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -72,6 +74,69 @@ def test_enqueue_poll_is_possible_again_once_the_job_is_gone(clean_queue) -> Non
     first.delete()
 
     assert queue_module.enqueue_poll(mailbox_id) is not None
+
+
+def test_concurrent_enqueue_poll_for_the_same_mailbox_only_enqueues_once(
+    clean_queue, monkeypatch
+) -> None:
+    """Regression for the exact cost bug: is_poll_in_flight (a Redis read)
+    and the enqueue itself (a Redis write) are two separate round-trips.
+    Two callers racing enqueue_poll for the same mailbox - a scheduler tick
+    colliding with a "poll now" click, or two scheduler replicas - could
+    both see "not in flight" before either had written anything, and RQ's
+    enqueue() pushes the job id onto the queue's list unconditionally, so
+    each caller pushed its own copy: two work horses run the same poll
+    concurrently and spend Claude/Voyage tokens classifying the same new
+    mail twice, before one of them loses the uq_email_mailbox_gmail_id
+    race at commit.
+
+    The barrier makes both threads call enqueue_poll() at (as close to) the
+    same instant as two threads can - without it the race still exists,
+    but one thread easily wins the lock microseconds before the other even
+    starts, and the test would pass by luck rather than by the lock
+    actually serializing them.
+    """
+    mailbox_id = str(uuid.uuid4())
+    barrier = threading.Barrier(2)
+
+    # Widens the is-it-in-flight check itself, so both threads are
+    # guaranteed to still be inside it when the other one runs - without
+    # this the race is real but narrow (a fetch against local Redis is
+    # fast enough that one thread usually finishes its whole enqueue
+    # before the other's check completes, so the bug reproduces only
+    # rarely on the unfixed code - not a fair regression test). The fix
+    # acquires its lock *before* this check, so the delayed thread on the
+    # fixed code path is the one that never got the lock and returns
+    # immediately, without ever calling the slowed-down fetch at all.
+    original_fetch = queue_module.Job.fetch
+
+    def _slow_fetch(*args, **kwargs):
+        try:
+            return original_fetch(*args, **kwargs)
+        finally:
+            time.sleep(0.05)
+
+    monkeypatch.setattr(queue_module.Job, "fetch", _slow_fetch)
+
+    results: list[object] = [None, None]
+
+    def _call(index: int) -> None:
+        # Both threads reach the real enqueue_poll() call at (as close to)
+        # the same instant as two threads can - this is what actually
+        # exercises the race: without the barrier, one thread easily wins
+        # the lock microseconds before the other even starts.
+        barrier.wait(timeout=5)
+        results[index] = queue_module.enqueue_poll(mailbox_id)
+
+    threads = [threading.Thread(target=_call, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    enqueued = [r for r in results if r is not None]
+    assert len(enqueued) == 1, "both concurrent callers enqueued a poll for the same mailbox"
+    assert clean_queue.count == 1
 
 
 def _mark_started(job, *, started_at) -> None:

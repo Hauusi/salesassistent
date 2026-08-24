@@ -21,6 +21,21 @@ ever mark the job finished. The job's hash then sits in Redis with status
 hand. `is_poll_in_flight` therefore treats a "started" job as stale (and
 cleans it up) once it has run well past its own timeout, rather than
 trusting RQ's bookkeeping unconditionally.
+
+The dedup *check* also has to be atomic with the enqueue, not just
+present. `is_poll_in_flight()` (a Redis read) and `queue.enqueue()` (a
+Redis write) are two separate round-trips; RQ's `enqueue_job()` pushes the
+job id onto the queue's list unconditionally; it never checks whether that
+id is already queued or running. Two callers that both call `enqueue_poll`
+for the same mailbox close enough together - a scheduler tick racing a
+"poll now" click, or two scheduler replicas - can each see "not in flight"
+before either has written anything, and each then pushes its own copy of
+the same job id: two work horses run `poll_mailbox_job` concurrently, both
+read the same not-yet-advanced watermark, and both spend Claude/Voyage
+tokens classifying the same new mail before one of them loses the
+uq_email_mailbox_gmail_id race at commit. `enqueue_poll` therefore wraps
+the check-then-enqueue in a short-lived Redis lock (`SET NX`), which is
+atomic server-side regardless of how many callers race it.
 """
 from __future__ import annotations
 
@@ -47,6 +62,13 @@ _IN_FLIGHT = frozenset({"queued", "started", "deferred", "scheduled"})
 # for a *worker* that died, not a race against a *job* that is merely
 # about to be killed for running too long.
 _STALE_STARTED_GRACE_SECONDS = 60
+
+# Just long enough to cover one Redis status read plus one enqueue write -
+# not a lock on the poll itself (that's the job's own job_timeout). A TTL
+# instead of an unconditional release means a caller that dies mid-check
+# (rare, but the whole point of not trusting bookkeeping blindly elsewhere
+# in this module) can't wedge every future enqueue for this mailbox.
+_ENQUEUE_LOCK_TTL_SECONDS = 10
 
 _redis_conn: Redis | None = None
 _queue: Queue | None = None
@@ -106,29 +128,51 @@ def is_poll_in_flight(mailbox_id: str) -> bool:
     return True
 
 
+def _enqueue_lock_key(mailbox_id: str) -> str:
+    return f"poll-enqueue-lock:{mailbox_id}"
+
+
 def enqueue_poll(mailbox_id: str) -> Job | None:
     """Enqueues a poll for one mailbox, or returns None if one is already
-    in flight."""
-    if is_poll_in_flight(mailbox_id):
-        logger.info("poll_skipped_already_in_flight mailbox=%s", mailbox_id)
+    in flight.
+
+    The is-it-in-flight check and the enqueue itself are wrapped in a
+    short-lived `SET NX` lock so two concurrent callers can't both pass the
+    check before either has enqueued - see the module docstring for why
+    that race matters (it double-spends Claude/Voyage tokens on the same
+    mail, not just a redundant job).
+    """
+    lock_key = _enqueue_lock_key(mailbox_id)
+    if not get_redis().set(lock_key, "1", nx=True, ex=_ENQUEUE_LOCK_TTL_SECONDS):
+        # Another caller is deciding right now whether to enqueue this
+        # mailbox - don't race it; whichever of us loses this round, the
+        # mailbox is (about to be) covered either way.
+        logger.info("poll_skipped_concurrent_enqueue mailbox=%s", mailbox_id)
         return None
 
-    settings = get_settings()
-    return get_queue().enqueue(
-        # Referenced by dotted path rather than imported: queue and tasks
-        # would otherwise import each other, which is what forced both
-        # modules into function-local imports before.
-        POLL_JOB_PATH,
-        mailbox_id,
-        job_id=poll_job_id(mailbox_id),
-        job_timeout=settings.mail_poll_job_timeout_seconds,
-        # A poll that dies on infrastructure (Redis blip, worker loss) is
-        # worth retrying; per-message failures are already absorbed inside
-        # the job itself and never reach this level.
-        retry=Retry(max=3, interval=[30, 120, 300]),
-        # Keep a finished job's record around long enough that the next
-        # tick can still see a *running* one, but not so long that a
-        # finished poll blocks the following tick.
-        result_ttl=60,
-        failure_ttl=86400,
-    )
+    try:
+        if is_poll_in_flight(mailbox_id):
+            logger.info("poll_skipped_already_in_flight mailbox=%s", mailbox_id)
+            return None
+
+        settings = get_settings()
+        return get_queue().enqueue(
+            # Referenced by dotted path rather than imported: queue and tasks
+            # would otherwise import each other, which is what forced both
+            # modules into function-local imports before.
+            POLL_JOB_PATH,
+            mailbox_id,
+            job_id=poll_job_id(mailbox_id),
+            job_timeout=settings.mail_poll_job_timeout_seconds,
+            # A poll that dies on infrastructure (Redis blip, worker loss) is
+            # worth retrying; per-message failures are already absorbed inside
+            # the job itself and never reach this level.
+            retry=Retry(max=3, interval=[30, 120, 300]),
+            # Keep a finished job's record around long enough that the next
+            # tick can still see a *running* one, but not so long that a
+            # finished poll blocks the following tick.
+            result_ttl=60,
+            failure_ttl=86400,
+        )
+    finally:
+        get_redis().delete(lock_key)

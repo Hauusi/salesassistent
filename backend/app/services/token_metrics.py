@@ -35,6 +35,34 @@ logger = logging.getLogger("app.llm.tokens")
 # against each other, not a substitute for the real usage numbers.
 _CHARS_PER_TOKEN = 4
 
+# Minimum cacheable prefix per model, in tokens - a `cache_control` marker
+# below this is a silent no-op: no error, cache_creation_input_tokens: 0,
+# cache_read_input_tokens: 0, forever, no matter how many times the call
+# runs (https://docs.claude.com/en/docs/build-with-claude/prompt-caching).
+# Not monotonic across model generations, so this can't be derived from
+# the model name - it has to be a table. Both call sites here (see
+# app/services/classification.py, app/services/draft_generation.py) put
+# `cache_control` on the system block, which - because tools render before
+# system - also covers the tool schema; this module compares that combined
+# size against the model actually used for the call.
+_CACHE_MIN_TOKENS_BY_MODEL: dict[str, int] = {
+    "claude-opus-5": 512,
+    "claude-fable-5": 512,
+    "claude-mythos-5": 512,
+    "claude-opus-4-8": 1024,
+    "claude-sonnet-5": 1024,
+    "claude-sonnet-4-6": 1024,
+    "claude-sonnet-4-5": 1024,
+    "claude-opus-4-1": 1024,
+    "claude-opus-4": 1024,
+    "claude-sonnet-4": 1024,
+    "claude-opus-4-7": 2048,
+    "claude-haiku-3-5": 2048,
+    "claude-opus-4-6": 4096,
+    "claude-opus-4-5": 4096,
+    "claude-haiku-4-5": 4096,
+}
+
 
 def estimate_tokens(text: str) -> int:
     if not text:
@@ -83,9 +111,26 @@ def log_prompt_breakdown(
     breakdown["cache_creation_input_tokens"] = getattr(usage, "cache_creation_input_tokens", None)
     breakdown["cache_read_input_tokens"] = getattr(usage, "cache_read_input_tokens", None)
 
+    # `cache_control` sits on the system block at both call sites, and
+    # tools render before system - so the cached prefix is system+tools
+    # combined. Below the model's minimum, cache_control is a documented
+    # no-op (not a bug to chase): flagging it here is what turns "why is
+    # cache_read always 0" from a fresh investigation into a one-line
+    # answer in the log itself.
+    cacheable_prefix_tokens_est = (
+        breakdown["system_instructions_tokens_est"] + breakdown["tool_schema_tokens_est"]
+    )
+    cache_min_tokens = _CACHE_MIN_TOKENS_BY_MODEL.get(model)
+    breakdown["cacheable_prefix_tokens_est"] = cacheable_prefix_tokens_est
+    breakdown["cache_min_tokens"] = cache_min_tokens
+    breakdown["below_cache_minimum"] = (
+        cache_min_tokens is not None and cacheable_prefix_tokens_est < cache_min_tokens
+    )
+
     logger.info(
         "claude_prompt_breakdown call=%s model=%s system=%d tools=%d mail=%d product=%d other=%d "
-        "total_est=%d actual_input=%s cache_read=%s cache_write=%s output=%s",
+        "total_est=%d actual_input=%s cache_read=%s cache_write=%s output=%s "
+        "cacheable_prefix_est=%d cache_min=%s below_cache_min=%s",
         breakdown["call"],
         breakdown["model"],
         breakdown["system_instructions_tokens_est"],
@@ -98,6 +143,22 @@ def log_prompt_breakdown(
         breakdown["cache_read_input_tokens"],
         breakdown["cache_creation_input_tokens"],
         breakdown["actual_output_tokens"],
+        breakdown["cacheable_prefix_tokens_est"],
+        breakdown["cache_min_tokens"],
+        breakdown["below_cache_minimum"],
         extra={"claude_prompt_breakdown": breakdown},
     )
+
+    if breakdown["below_cache_minimum"]:
+        logger.info(
+            "claude_prompt_cache_ineligible call=%s model=%s cacheable_prefix_est=%d "
+            "cache_min=%d - cache_control is a documented no-op below the model's minimum "
+            "cacheable prefix; this is not fixable by changing how cache_control is set, "
+            "only by growing the shared system+tools prefix past cache_min or switching to "
+            "a model with a lower minimum",
+            call,
+            model,
+            cacheable_prefix_tokens_est,
+            cache_min_tokens,
+        )
     return breakdown
