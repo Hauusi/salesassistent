@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/knowledge", label: "Mails" },
   { href: "/knowledge/products", label: "Produkte" },
+  { href: "/knowledge/product-suggestions", label: "Produktvorschläge" },
 ];
 
 export default function KnowledgeLayout({ children }: LayoutProps<"/knowledge">) {

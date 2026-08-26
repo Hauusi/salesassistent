@@ -335,6 +335,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/product-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Product Suggestions */
+        get: operations["list_product_suggestions_api_product_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/product-suggestions/{suggestion_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Product Suggestion
+         * @description Creates the real catalog Product from a pending suggestion.
+         *
+         *     Unlike Draft approval there is no external side effect to protect (no
+         *     mail gets sent) - the row lock only has to stop two concurrent
+         *     approvals from both creating a Product for the same suggestion.
+         */
+        post: operations["approve_product_suggestion_api_product_suggestions__suggestion_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/product-suggestions/{suggestion_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Product Suggestion */
+        post: operations["reject_product_suggestion_api_product_suggestions__suggestion_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -726,6 +784,48 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ProductSuggestionOut */
+        ProductSuggestionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Email Message Id
+             * Format: uuid
+             */
+            email_message_id: string;
+            /** Sku */
+            sku: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            status: components["schemas"]["ProductSuggestionStatus"];
+            /** Created Product Id */
+            created_product_id: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Rejected Reason */
+            rejected_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            email_message: components["schemas"]["EmailSummaryOut"];
+        };
+        /** ProductSuggestionRejectIn */
+        ProductSuggestionRejectIn: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * ProductSuggestionStatus
+         * @enum {string}
+         */
+        ProductSuggestionStatus: "vorgeschlagen" | "freigegeben" | "abgelehnt";
         /**
          * ProductUpdateIn
          * @description All fields optional - PUT applies a partial update (only supplied
@@ -1401,6 +1501,103 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_product_suggestions_api_product_suggestions_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["ProductSuggestionStatus"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductSuggestionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_product_suggestion_api_product_suggestions__suggestion_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductSuggestionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_product_suggestion_api_product_suggestions__suggestion_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductSuggestionRejectIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductSuggestionOut"];
+                };
             };
             /** @description Validation Error */
             422: {

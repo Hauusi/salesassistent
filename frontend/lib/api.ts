@@ -41,6 +41,8 @@ export type CaseDetail = Schemas["CaseDetailOut"];
 export type EmailMessage = Schemas["EmailOut"];
 export type EmailSummary = Schemas["EmailSummaryOut"];
 export type Draft = Schemas["DraftOut"];
+export type ProductSuggestionStatus = Schemas["ProductSuggestionStatus"];
+export type ProductSuggestion = Schemas["ProductSuggestionOut"];
 export type Mailbox = Schemas["MailboxOut"];
 export type Product = Schemas["ProductOut"];
 export type ProductInput = Schemas["ProductCreateIn"];
@@ -188,4 +190,14 @@ export const api = {
       formData
     );
   },
+
+  listProductSuggestions: (status?: ProductSuggestionStatus) =>
+    request<ProductSuggestion[]>(`/api/product-suggestions${queryString({ status })}`),
+  approveProductSuggestion: (id: string) =>
+    request<ProductSuggestion>(`/api/product-suggestions/${id}/approve`, { method: "POST" }),
+  rejectProductSuggestion: (id: string, reason?: string) =>
+    request<ProductSuggestion>(`/api/product-suggestions/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? null }),
+    }),
 };

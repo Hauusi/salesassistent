@@ -36,6 +36,7 @@ from app.services import case_matching, classification, embeddings
 from app.services.action_log_service import log_action
 from app.services.draft_generation import generate_draft
 from app.services.gmail_client import FetchedEmail
+from app.services.product_suggestion_service import maybe_create_suggestion
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,34 @@ async def _run_filing_action(
     )
 
 
+async def _flag_product_suggestion(
+    db: AsyncSession, *, email: EmailMessage, result: classification.ClassificationResult
+) -> None:
+    """Files a pending ProductSuggestion when classify_email detected a new
+    article number + description in this mail - see
+    app/services/product_suggestion_service.py. Piggybacks on the
+    classification call already made above; never calls the model itself.
+
+    Independent of wichtigkeits_kategorie: a supplier announcing a new
+    article is routine "information" mail, not a reply-needed one, but the
+    detection should not be tied to any one category.
+    """
+    suggestion = await maybe_create_suggestion(
+        db, tenant_id=email.tenant_id, email=email, result=result
+    )
+    if suggestion is None:
+        return
+    await log_action(
+        db,
+        tenant_id=email.tenant_id,
+        actor=ActionActor.SYSTEM,
+        entity_type="product_suggestion",
+        entity_id=suggestion.id,
+        action="product_suggestion_created",
+        detail={"sku": suggestion.sku, "email_message_id": str(email.id)},
+    )
+
+
 async def process_incoming_email(
     db: AsyncSession,
     *,
@@ -341,6 +370,8 @@ async def process_incoming_email(
         await _generate_draft_for(db, email=email)
     else:
         await _run_filing_action(db, email=email, contact=contact, case=case)
+
+    await _flag_product_suggestion(db, email=email, result=result)
 
     await db.commit()
     return email

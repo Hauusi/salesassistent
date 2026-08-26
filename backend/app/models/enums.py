@@ -49,3 +49,9 @@ class ActionActor(str, enum.Enum):
 
 class MailboxProvider(str, enum.Enum):
     GMAIL = "gmail"
+
+
+class ProductSuggestionStatus(str, enum.Enum):
+    VORGESCHLAGEN = "vorgeschlagen"
+    FREIGEGEBEN = "freigegeben"
+    ABGELEHNT = "abgelehnt"

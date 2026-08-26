@@ -7,6 +7,7 @@ from app.models.draft import Draft
 from app.models.email_message import EmailMessage
 from app.models.mailbox import Mailbox
 from app.models.product import Product
+from app.models.product_suggestion import ProductSuggestion
 from app.models.tenant import Tenant
 from app.models.user import User
 
@@ -20,6 +21,7 @@ __all__ = [
     "EmailMessage",
     "Mailbox",
     "Product",
+    "ProductSuggestion",
     "Tenant",
     "User",
 ]

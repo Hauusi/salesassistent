@@ -7,7 +7,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, cases, contacts, drafts, emails, knowledge, mailboxes
+from app.api.routes import (
+    auth,
+    cases,
+    contacts,
+    drafts,
+    emails,
+    knowledge,
+    mailboxes,
+    product_suggestions,
+)
 from app.config import get_settings
 from app.db import engine
 from app.logging_config import configure_logging
@@ -57,6 +66,7 @@ app.include_router(emails.router)
 app.include_router(cases.router)
 app.include_router(contacts.router)
 app.include_router(knowledge.router)
+app.include_router(product_suggestions.router)
 
 
 @app.get("/api/health")

@@ -76,6 +76,35 @@ _CLASSIFY_TOOL = {
                 "type": "string",
                 "description": "Titel (max. 8 Worte) für diese Mail, falls noch kein Case existiert.",
             },
+            # Product-suggestion detection piggybacks on this same call
+            # rather than a second Claude request - see
+            # app/services/product_suggestion_service.py. All three are
+            # optional and only meaningful together: leave every one empty
+            # unless the mail contains both its own article number AND a
+            # description/spec text for it (e.g. a supplier announcing a
+            # new item) - a bare order/inquiry referencing an *existing*
+            # article number with no description is not a detection.
+            "detected_product_sku": {
+                "type": "string",
+                "description": (
+                    "Artikelnummer/SKU, nur falls die Mail eine eigene Artikelnummer "
+                    "UND einen zugehörigen Artikeltext/Beschreibung dazu enthält. Sonst leer lassen."
+                ),
+            },
+            "detected_product_name": {
+                "type": "string",
+                "description": (
+                    "Kurzer Produktname (max. 8 Worte) für detected_product_sku. "
+                    "Nur gesetzt, wenn detected_product_sku gesetzt ist."
+                ),
+            },
+            "detected_product_description": {
+                "type": "string",
+                "description": (
+                    "Artikeltext/Beschreibung aus der Mail zu detected_product_sku. "
+                    "Nur gesetzt, wenn detected_product_sku gesetzt ist."
+                ),
+            },
         },
         "required": ["wichtigkeits_kategorie", "typ", "confidence", "reasoning"],
     },
@@ -85,7 +114,10 @@ _SYSTEM_PROMPT = (
     "Du bist der Klassifikations-Assistent eines B2B-Sales-Postfachs. Ordne jede "
     "E-Mail per Tool-Aufruf 'classify_email' genau einer Wichtigkeits- und einer "
     "Typ-Kategorie zu. Sei konservativ bei spam_verdacht - nur eindeutig "
-    "unerwünschte/betrügerische Mails, im Zweifel eher 'newsletter' oder 'information'."
+    "unerwünschte/betrügerische Mails, im Zweifel eher 'newsletter' oder 'information'. "
+    "Enthält die Mail außerdem eine eigene Artikelnummer mit zugehörigem Artikeltext "
+    "(z.B. eine Lieferantenankündigung eines neuen Produkts), fülle zusätzlich "
+    "detected_product_sku/-name/-description; sonst lasse diese drei Felder leer."
 )
 
 
@@ -96,6 +128,9 @@ class ClassificationResult:
     confidence: float
     reasoning: str
     suggested_case_title: str | None = None
+    detected_product_sku: str | None = None
+    detected_product_name: str | None = None
+    detected_product_description: str | None = None
 
 
 def _build_user_message(*, subject: str | None, sender_address: str, body: str) -> str:
@@ -193,4 +228,7 @@ async def classify_email(
         ),
         reasoning=coerce_str(data.get("reasoning"), "(keine Begründung geliefert)", max_chars=1000),
         suggested_case_title=coerce_str(data.get("suggested_case_title"), max_chars=500) or None,
+        detected_product_sku=coerce_str(data.get("detected_product_sku"), max_chars=100) or None,
+        detected_product_name=coerce_str(data.get("detected_product_name"), max_chars=255) or None,
+        detected_product_description=coerce_str(data.get("detected_product_description")) or None,
     )
