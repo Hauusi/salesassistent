@@ -2017,6 +2017,39 @@
             ],
             "title": "Last Synced At"
           },
+          "last_poll_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MailboxPollStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_poll_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Poll Error Message"
+          },
+          "last_poll_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Poll At"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -2029,9 +2062,21 @@
           "email_address",
           "is_active",
           "last_synced_at",
+          "last_poll_status",
+          "last_poll_error_message",
+          "last_poll_at",
           "created_at"
         ],
         "title": "MailboxOut"
+      },
+      "MailboxPollStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "error"
+        ],
+        "title": "MailboxPollStatus",
+        "description": "Outcome of the mailbox's most recent poll *attempt* - see\napp/workers/tasks.py. Distinct from per-message failures (see\nActionLog \"mail_processing_failed\"): one bad mail costs that mail, not\nthe mailbox, so it does not flip this to ERROR. This reflects whether\nthe poll job itself completed - previously visible only in container\nlogs."
       },
       "PollTriggerOut": {
         "properties": {

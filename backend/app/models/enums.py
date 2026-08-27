@@ -51,6 +51,18 @@ class MailboxProvider(str, enum.Enum):
     GMAIL = "gmail"
 
 
+class MailboxPollStatus(str, enum.Enum):
+    """Outcome of the mailbox's most recent poll *attempt* - see
+    app/workers/tasks.py. Distinct from per-message failures (see
+    ActionLog "mail_processing_failed"): one bad mail costs that mail, not
+    the mailbox, so it does not flip this to ERROR. This reflects whether
+    the poll job itself completed - previously visible only in container
+    logs."""
+
+    OK = "ok"
+    ERROR = "error"
+
+
 class ProductSuggestionStatus(str, enum.Enum):
     VORGESCHLAGEN = "vorgeschlagen"
     FREIGEGEBEN = "freigegeben"

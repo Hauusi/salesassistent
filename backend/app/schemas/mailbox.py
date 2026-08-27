@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from app.models.enums import MailboxPollStatus
 from app.schemas.common import ORMBase
 
 
@@ -11,6 +12,9 @@ class MailboxOut(ORMBase):
     email_address: str
     is_active: bool
     last_synced_at: datetime | None
+    last_poll_status: MailboxPollStatus | None
+    last_poll_error_message: str | None
+    last_poll_at: datetime | None
     created_at: datetime
 
 

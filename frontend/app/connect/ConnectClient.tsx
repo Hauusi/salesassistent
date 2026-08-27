@@ -1,10 +1,33 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { api, API_BASE_URL } from "@/lib/api";
+import { api, API_BASE_URL, type Mailbox } from "@/lib/api";
 import { errorMessage, useApi } from "@/lib/useApi";
 import { AsyncState } from "@/components/AsyncState";
-import { formatDate } from "@/lib/labels";
+import { formatDate, formatRelativeTime } from "@/lib/labels";
+
+/** "Letzter Abruf: vor 2 Min. - OK" / "... - fehlgeschlagen: <Grund>" /
+ * "Noch nie abgerufen" for a mailbox that has never had a poll attempt
+ * (last_poll_at is null - distinct from a poll that ran and succeeded). */
+function PollStatus({ mailbox }: { mailbox: Mailbox }) {
+  if (!mailbox.last_poll_at) {
+    return <span className="muted">Noch nie abgerufen</span>;
+  }
+  const when = formatRelativeTime(mailbox.last_poll_at);
+  if (mailbox.last_poll_status === "error") {
+    return (
+      <span className="badge badge-danger" title={formatDate(mailbox.last_poll_at)}>
+        Letzter Abruf: {when} - fehlgeschlagen
+        {mailbox.last_poll_error_message ? `: ${mailbox.last_poll_error_message}` : ""}
+      </span>
+    );
+  }
+  return (
+    <span className="badge badge-success" title={formatDate(mailbox.last_poll_at)}>
+      Letzter Abruf: {when} - OK
+    </span>
+  );
+}
 
 export default function ConnectClient({
   connected,
@@ -90,8 +113,11 @@ export default function ConnectClient({
                   <div className="snippet">
                     {mb.is_active ? "Aktiv" : "Inaktiv"}
                     {" · "}
-                    Zuletzt abgerufen:{" "}
+                    Synchronisiert bis:{" "}
                     {mb.last_synced_at ? formatDate(mb.last_synced_at) : "noch nie"}
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <PollStatus mailbox={mb} />
                   </div>
                 </div>
                 <button onClick={() => handlePollNow(mb.id)} disabled={pollingId === mb.id}>

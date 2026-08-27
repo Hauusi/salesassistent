@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import async_session_factory, engine
-from app.models.enums import ActionActor
+from app.models.enums import ActionActor, MailboxPollStatus
 from app.models.mailbox import Mailbox
 from app.services import gmail_client
 from app.services.action_log_service import log_action
@@ -69,6 +69,15 @@ async def _process_one_message(
             "mail_processing_failed mailbox=%s gmail_message_id=%s", mailbox.id, message_id
         )
         await db.rollback()
+        # rollback() expires every attribute on `mailbox` - a plain
+        # attribute access afterwards (as opposed to this explicit,
+        # async-safe refresh) triggers a synchronous lazy-load, which
+        # raises MissingGreenlet on a real session. Without this, every
+        # per-message failure crashed while writing its own audit-trail
+        # entry below, and - since the caller's loop reuses this same
+        # `mailbox` object for the next message_id - poisoned every
+        # message behind it in the same batch too.
+        await db.refresh(mailbox)
         await _log_failure(db, mailbox=mailbox, message_id=message_id, exc=exc)
 
 
@@ -80,13 +89,20 @@ async def _log_failure(
     Best-effort by design: if even this write fails, the log line above is
     still the record, and the poll cycle carries on.
     """
+    # Captured once, up front: if the write below fails, its except block
+    # rolls back and expires every attribute on `mailbox` again, and
+    # re-reading mailbox.id there (rather than this already-captured
+    # local) would itself raise MissingGreenlet trying to lazy-load an
+    # expired attribute outside of an await - the exact bug this whole
+    # function otherwise falls into.
+    mailbox_id = mailbox.id
     try:
         await log_action(
             db,
             tenant_id=mailbox.tenant_id,
             actor=ActionActor.SYSTEM,
             entity_type="mailbox",
-            entity_id=mailbox.id,
+            entity_id=mailbox_id,
             action="mail_processing_failed",
             detail={
                 "gmail_message_id": message_id,
@@ -96,8 +112,18 @@ async def _log_failure(
         )
         await db.commit()
     except Exception:
-        logger.exception("failure_audit_write_failed mailbox=%s", mailbox.id)
+        logger.exception("failure_audit_write_failed mailbox=%s", mailbox_id)
         await db.rollback()
+        try:
+            # Same reasoning as the refresh in _process_one_message: this
+            # rollback expires `mailbox` again, and the caller's loop
+            # reuses this object for the next message_id. Swallowed on its
+            # own failure - this is already the "even the audit log write
+            # failed" fallback path, and the log line above is still the
+            # record either way.
+            await db.refresh(mailbox)
+        except Exception:
+            logger.exception("mailbox_refresh_after_failed_audit_write_failed mailbox=%s", mailbox_id)
 
 
 async def _poll_mailbox_async(mailbox_id: str) -> PollResult:
@@ -108,38 +134,81 @@ async def _poll_mailbox_async(mailbox_id: str) -> PollResult:
         if mailbox is None or not mailbox.is_active:
             return result
 
-        service, creds = await gmail_client.get_gmail_service(mailbox)
+        try:
+            service, creds = await gmail_client.get_gmail_service(mailbox)
 
-        if gmail_client.apply_refreshed_credentials(mailbox, creds):
-            await db.commit()
+            if gmail_client.apply_refreshed_credentials(mailbox, creds):
+                await db.commit()
 
-        after_query = None
-        if mailbox.last_synced_at is not None:
-            after_query = f"after:{int(mailbox.last_synced_at.timestamp())}"
+            after_query = None
+            if mailbox.last_synced_at is not None:
+                after_query = f"after:{int(mailbox.last_synced_at.timestamp())}"
 
-        message_ids = await gmail_client.list_new_message_ids(
-            service, after_query=after_query, max_results=get_settings().mail_poll_batch_size
-        )
-
-        for message_id in message_ids:
-            # Commit happens per message, not once after the whole batch.
-            # By that point real Claude tokens have been spent on
-            # classification (and draft generation); discarding them on a
-            # later message's failure would mean re-spending them on the
-            # next cycle, because the idempotency check in
-            # process_incoming_email keys on a row that was never persisted.
-            await _process_one_message(
-                db, service=service, mailbox=mailbox, message_id=message_id, result=result
+            message_ids = await gmail_client.list_new_message_ids(
+                service, after_query=after_query, max_results=get_settings().mail_poll_batch_size
             )
 
-        # Always advance the watermark, including past messages that failed.
-        # Those are recorded in the audit trail; leaving the watermark back
-        # would retry them forever and block everything behind them.
-        mailbox.last_synced_at = datetime.now(UTC)
-        await db.commit()
+            for message_id in message_ids:
+                # Commit happens per message, not once after the whole batch.
+                # By that point real Claude tokens have been spent on
+                # classification (and draft generation); discarding them on a
+                # later message's failure would mean re-spending them on the
+                # next cycle, because the idempotency check in
+                # process_incoming_email keys on a row that was never persisted.
+                await _process_one_message(
+                    db, service=service, mailbox=mailbox, message_id=message_id, result=result
+                )
+
+            # Always advance the watermark, including past messages that failed.
+            # Those are recorded in the audit trail; leaving the watermark back
+            # would retry them forever and block everything behind them.
+            mailbox.last_synced_at = datetime.now(UTC)
+            _mark_poll_outcome(mailbox, status=MailboxPollStatus.OK, error=None)
+            await db.commit()
+        except Exception as exc:
+            # A crash here is job-level (Gmail auth, rate limits exhausted,
+            # the watermark commit itself) - distinct from a per-message
+            # failure, which _process_one_message already absorbed above
+            # without raising. Previously this was visible only in
+            # container logs; the mailbox's poll status is the only place a
+            # human looking at the UI would ever see it.
+            logger.exception("mailbox_poll_failed mailbox=%s", mailbox_id)
+            await db.rollback()
+            await _record_poll_failure(mailbox_id, exc)
+            raise
 
     logger.info("mailbox_poll_finished mailbox=%s %s", mailbox_id, result)
     return result
+
+
+def _mark_poll_outcome(
+    mailbox: Mailbox, *, status: MailboxPollStatus, error: str | None
+) -> None:
+    mailbox.last_poll_status = status
+    # Text column (unbounded), but an exception's str() can still run to
+    # kilobytes (a provider's HTML error body, say) - capped for the same
+    # reason _log_failure below caps its own audit-trail error field.
+    mailbox.last_poll_error_message = error[:2000] if error else None
+    mailbox.last_poll_at = datetime.now(UTC)
+
+
+async def _record_poll_failure(mailbox_id: str, exc: Exception) -> None:
+    """Writes the poll failure on a fresh session, independent of whatever
+    state the failed attempt's own session/transaction ended up in - e.g. a
+    DB-connection-level failure would otherwise also break this write.
+
+    Best-effort: if even this fails, the exception this function was
+    called for still propagates and lands in the logs either way.
+    """
+    try:
+        async with async_session_factory() as db:
+            mailbox = await db.get(Mailbox, uuid.UUID(mailbox_id))
+            if mailbox is None:
+                return
+            _mark_poll_outcome(mailbox, status=MailboxPollStatus.ERROR, error=str(exc))
+            await db.commit()
+    except Exception:
+        logger.exception("mailbox_poll_failure_record_failed mailbox=%s", mailbox_id)
 
 
 async def _run_and_dispose(coro):

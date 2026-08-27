@@ -694,12 +694,28 @@ export interface components {
             is_active: boolean;
             /** Last Synced At */
             last_synced_at: string | null;
+            last_poll_status: components["schemas"]["MailboxPollStatus"] | null;
+            /** Last Poll Error Message */
+            last_poll_error_message: string | null;
+            /** Last Poll At */
+            last_poll_at: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
         };
+        /**
+         * MailboxPollStatus
+         * @description Outcome of the mailbox's most recent poll *attempt* - see
+         *     app/workers/tasks.py. Distinct from per-message failures (see
+         *     ActionLog "mail_processing_failed"): one bad mail costs that mail, not
+         *     the mailbox, so it does not flip this to ERROR. This reflects whether
+         *     the poll job itself completed - previously visible only in container
+         *     logs.
+         * @enum {string}
+         */
+        MailboxPollStatus: "ok" | "error";
         /**
          * PollTriggerOut
          * @description Result of a manual poll trigger.

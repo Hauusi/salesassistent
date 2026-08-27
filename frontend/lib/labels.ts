@@ -89,3 +89,17 @@ export function formatDate(iso: string): string {
     timeStyle: "short",
   });
 }
+
+/** "vor 2 Min.", "vor 3 Std.", "vor 5 Tagen" - for a short, glanceable
+ * "how fresh is this" reading (e.g. the mailbox poll status), where the
+ * full formatDate() timestamp is more precision than the question needs. */
+export function formatRelativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const diffMinutes = Math.round(diffMs / 60_000);
+  if (diffMinutes < 1) return "gerade eben";
+  if (diffMinutes < 60) return `vor ${diffMinutes} Min.`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `vor ${diffHours} Std.`;
+  const diffDays = Math.round(diffHours / 24);
+  return `vor ${diffDays} Tag${diffDays === 1 ? "" : "en"}`;
+}
