@@ -28,19 +28,27 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Validates settings that must agree with the database before serving.
+    """Validates configuration before serving a single request.
 
-    A mismatch here otherwise surfaces much later and far from its cause -
-    as an insert that rejects every embedding, or a product search that
-    silently matches nothing. Failing at boot puts it in front of whoever
-    is deploying.
+    Two categories, checked separately on purpose:
+
+    - Required settings (API keys, OAuth credentials, the token-encryption
+      key, and - outside local development - the base URLs): missing or
+      placeholder values here mean nothing that needs them can ever work,
+      in any environment. Always fatal, never swallowed - see
+      startup_checks.verify_required_settings.
+    - Settings that must agree with the database (a Postgres text-search
+      configuration, the embedding column width): a mismatch otherwise
+      surfaces much later and far from its cause, as an insert that
+      rejects every embedding or a product search that silently matches
+      nothing. In development this is downgraded to a loud log instead of
+      refusing to boot, since the database may simply not be migrated yet.
     """
     settings = get_settings()
+    startup_checks.verify_required_settings()
     try:
-        await startup_checks.run_all(engine)
+        await startup_checks.run_db_dependent_checks(engine)
     except startup_checks.StartupCheckFailed:
-        # In development, surfacing this as a loud log and carrying on is
-        # more useful than refusing to boot before the DB is migrated.
         if settings.app_env == "development":
             logger.exception("startup_check_failed (development: continuing anyway)")
         else:

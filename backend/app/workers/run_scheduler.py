@@ -12,6 +12,7 @@ import time
 
 from app.config import get_settings
 from app.logging_config import configure_logging
+from app.services import startup_checks
 from app.workers.tasks import enqueue_poll_for_all_active_mailboxes
 
 configure_logging()
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # Unlike the API process, this loop has no per-request boundary where a
+    # missing Anthropic/Voyage/Google credential would surface on its own -
+    # every tick would just fail identically and log it, forever. Checked
+    # once, hard, before the first tick - see
+    # startup_checks.verify_required_settings.
+    startup_checks.verify_required_settings()
+
     settings = get_settings()
     logger.info("Scheduler started, polling every %ss", settings.mail_poll_interval_seconds)
     while True:
