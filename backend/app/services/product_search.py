@@ -92,12 +92,34 @@ async def search_products(
     *,
     tenant_id: uuid.UUID,
     query_text: str,
+    query_embedding: list[float] | None = None,
     limit: int = 5,
 ) -> list[Product]:
     """Finds catalog entries relevant to `query_text`, best match first.
 
-    Returns an empty list when nothing matches - callers should treat that
-    as "no grounding available", not an error.
+    Combines two independent signals:
+
+    - Keyword match (Postgres full-text search, stemmed) - the original
+      behaviour, high precision, finds exact/stemmed vocabulary overlap.
+    - Vector similarity (pgvector cosine distance), when `query_embedding`
+      is supplied - finds semantically related products that share no
+      keyword with the inquiry at all (e.g. "LED Leuchtbalken" finding a
+      catalog entry named "Lichtleiste LED"). This module never calls the
+      embedding model itself: the caller passes in whatever embedding its
+      own text already has (see app/services/draft_generation.py, which
+      reuses the inquiry mail's embedding rather than paying for a second
+      one at search time - see app/services/product_embedding.py for the
+      matching rule on the catalog side).
+
+    Keyword hits are listed first (ranked by ts_rank) - an exact
+    vocabulary match is the stronger, more directly explainable signal.
+    Vector-only hits (products the keyword search did not already find)
+    fill the remaining `limit` slots, ranked by similarity and gated by
+    PRODUCT_SEARCH_SIMILARITY_THRESHOLD so a merely-adjacent product is
+    never presented as if it answered the inquiry.
+
+    Returns an empty list when nothing matches either way - callers should
+    treat that as "no grounding available", not an error.
     """
     if not query_text or not query_text.strip():
         return []
@@ -105,14 +127,36 @@ async def search_products(
     document = _searchable_document()
     query = _or_tsquery(query_text)
 
-    stmt = (
+    keyword_stmt = (
         select(Product)
         .where(Product.tenant_id == tenant_id, document.op("@@")(query))
         .order_by(func.ts_rank(document, query).desc(), Product.name)
         .limit(limit)
     )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    keyword_matches = list((await db.execute(keyword_stmt)).scalars().all())
+
+    remaining = limit - len(keyword_matches)
+    if query_embedding is None or remaining <= 0:
+        return keyword_matches
+
+    distance_expr = Product.embedding.cosine_distance(query_embedding)
+    max_distance = 1.0 - get_settings().product_search_similarity_threshold
+    vector_stmt = (
+        select(Product)
+        .where(
+            Product.tenant_id == tenant_id,
+            Product.embedding.isnot(None),
+            distance_expr <= max_distance,
+        )
+        .order_by(distance_expr)
+        .limit(remaining)
+    )
+    already_found = [p.id for p in keyword_matches]
+    if already_found:
+        vector_stmt = vector_stmt.where(Product.id.notin_(already_found))
+
+    vector_matches = list((await db.execute(vector_stmt)).scalars().all())
+    return keyword_matches + vector_matches
 
 
 async def search_products_by_text(

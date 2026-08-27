@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     # Must name a configuration this database actually has - validated at
     # startup. Set to the language your catalog and your customers write in.
     product_search_text_config: str = "german"
+    # Cosine similarity above which a semantically-matched product (no
+    # shared keyword with the inquiry - e.g. "LED Leuchtbalken" finding a
+    # catalog entry named "Lichtleiste LED") is considered relevant enough
+    # to include. No canonical value given anywhere for this MVP, so - like
+    # case_similarity_threshold above - a documented, configurable default
+    # rather than a guess baked into the code.
+    product_search_similarity_threshold: float = 0.75
 
     # --- Single-tenant MVP bootstrap ---
     default_tenant_slug: str = "default"

@@ -35,6 +35,101 @@ async def _add_product(db_session: AsyncSession, tenant_id, **kwargs) -> Product
     return product
 
 
+def _basis_vector(dim: int, dimensions: int = 1024) -> list[float]:
+    """A unit vector along axis `dim` - two different axes are exactly
+    orthogonal (cosine similarity 0), and the same axis is an exact match
+    (similarity 1), so semantic-match tests don't depend on a real
+    embedding model's actual notion of similarity."""
+    vec = [0.0] * dimensions
+    vec[dim] = 1.0
+    return vec
+
+
+async def test_search_finds_a_semantic_match_with_no_shared_keyword(
+    db_session: AsyncSession, tenant: Tenant
+) -> None:
+    """"LED Leuchtbalken" finding a catalog entry named "Lichtleiste LED" -
+    the motivating case for the vector-similarity fallback. The query text
+    here deliberately shares no stem with the target product at all, so a
+    hit can only come from query_embedding."""
+    target_vector = _basis_vector(0)
+    unrelated_vector = _basis_vector(1)
+
+    target = await _add_product(
+        db_session, tenant.id, name="Lichtleiste LED", category="Beleuchtung",
+        description="Lineares LED-Leuchtmittel", embedding=target_vector,
+    )
+    await _add_product(
+        db_session, tenant.id, name="Hydraulikschlauch HS-20", category="Hydraulik",
+        embedding=unrelated_vector,
+    )
+
+    results = await search_products(
+        db_session,
+        tenant_id=tenant.id,
+        query_text="Bitte um Rückmeldung bezüglich unserer Bestellung",
+        query_embedding=target_vector,
+    )
+
+    assert [p.id for p in results] == [target.id]
+
+
+async def test_search_ignores_a_similarity_below_the_threshold(
+    db_session: AsyncSession, tenant: Tenant
+) -> None:
+    await _add_product(
+        db_session, tenant.id, name="Nicht verwandtes Produkt", embedding=_basis_vector(1)
+    )
+
+    results = await search_products(
+        db_session,
+        tenant_id=tenant.id,
+        query_text="Völlig andere Anfrage ohne Bezug",
+        query_embedding=_basis_vector(0),  # orthogonal - similarity 0.0
+    )
+
+    assert results == []
+
+
+async def test_search_without_a_query_embedding_only_uses_keywords(
+    db_session: AsyncSession, tenant: Tenant
+) -> None:
+    """Backward compatible: a caller that doesn't have (or pass) an
+    embedding yet must still get the existing keyword-only behaviour, not
+    an error."""
+    await _add_product(
+        db_session, tenant.id, name="Lichtleiste LED", embedding=_basis_vector(0)
+    )
+
+    results = await search_products(
+        db_session,
+        tenant_id=tenant.id,
+        query_text="Bitte um Rückmeldung bezüglich unserer Bestellung",
+    )
+
+    assert results == []
+
+
+async def test_keyword_hits_are_listed_before_semantic_only_hits(
+    db_session: AsyncSession, tenant: Tenant
+) -> None:
+    keyword_hit = await _add_product(
+        db_session, tenant.id, name="Aluminiumprofil AP-40", embedding=_basis_vector(1)
+    )
+    semantic_hit = await _add_product(
+        db_session, tenant.id, name="Lichtleiste LED", embedding=_basis_vector(0)
+    )
+
+    results = await search_products(
+        db_session,
+        tenant_id=tenant.id,
+        query_text="Anfrage zu Aluminiumprofilen",
+        query_embedding=_basis_vector(0),
+    )
+
+    assert [p.id for p in results] == [keyword_hit.id, semantic_hit.id]
+
+
 async def test_search_products_matches_on_name_category_description(
     db_session: AsyncSession, tenant: Tenant
 ) -> None:

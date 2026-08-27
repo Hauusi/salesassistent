@@ -167,38 +167,44 @@ async def verify_text_search_config(engine: AsyncEngine) -> None:
 
 
 async def verify_embedding_dimensions(engine: AsyncEngine) -> None:
-    """EMBEDDING_DIMENSIONS must match the actual vector column width.
+    """EMBEDDING_DIMENSIONS must match the actual vector column width - on
+    every table that has one (email_messages, products - see
+    app/models/product.py).
 
-    The setting sizes the mapped column at import time while the migration
-    wrote a fixed width. Changing the embedding model - to one with 512 or
-    2048 dimensions - therefore desynced the two, and every insert failed
-    at runtime with a dimension mismatch.
+    The setting sizes each mapped column at import time while its
+    migration wrote a fixed width. Changing the embedding model - to one
+    with 512 or 2048 dimensions - therefore desynced the two, and every
+    insert failed at runtime with a dimension mismatch.
     """
     configured = get_settings().embedding_dimensions
 
-    def _column_type(sync_conn) -> str | None:
-        columns = inspect(sync_conn).get_columns("email_messages")
+    def _column_type(sync_conn, table_name: str) -> str | None:
+        columns = inspect(sync_conn).get_columns(table_name)
         for column in columns:
             if column["name"] == "embedding":
                 return str(column["type"])
         return None
 
-    async with engine.connect() as conn:
-        rendered = await conn.run_sync(_column_type)
+    for table_name in ("email_messages", "products"):
+        async with engine.connect() as conn:
+            rendered = await conn.run_sync(_column_type, table_name)
 
-    if rendered is None:
-        logger.warning("startup_check_skipped check=embedding_dimensions reason=column_not_found")
-        return
+        if rendered is None:
+            logger.warning(
+                "startup_check_skipped check=embedding_dimensions table=%s reason=column_not_found",
+                table_name,
+            )
+            continue
 
-    # Rendered as e.g. "VECTOR(1024)".
-    digits = "".join(ch for ch in rendered if ch.isdigit())
-    if digits and int(digits) != configured:
-        raise StartupCheckFailed(
-            f"EMBEDDING_DIMENSIONS={configured} passt nicht zur Spalte "
-            f"email_messages.embedding ({rendered}). Entweder die Einstellung "
-            f"zurücksetzen oder eine Migration schreiben, die die Spalte ändert."
-        )
-    logger.info("startup_check_ok check=embedding_dimensions value=%s", configured)
+        # Rendered as e.g. "VECTOR(1024)".
+        digits = "".join(ch for ch in rendered if ch.isdigit())
+        if digits and int(digits) != configured:
+            raise StartupCheckFailed(
+                f"EMBEDDING_DIMENSIONS={configured} passt nicht zur Spalte "
+                f"{table_name}.embedding ({rendered}). Entweder die Einstellung "
+                f"zurücksetzen oder eine Migration schreiben, die die Spalte ändert."
+            )
+        logger.info("startup_check_ok check=embedding_dimensions table=%s value=%s", table_name, configured)
 
 
 async def run_db_dependent_checks(engine: AsyncEngine) -> None:

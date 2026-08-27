@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
 from app.schemas.product import ProductImportResult
+from app.services.product_embedding import set_product_embedding
 
 REQUIRED_COLUMNS = {"name"}
 
@@ -104,10 +105,18 @@ async def import_products_csv(
         if existing is not None:
             for key, value in fields.items():
                 setattr(existing, key, value)
+            product = existing
             updated += 1
         else:
-            db.add(Product(tenant_id=tenant_id, **fields))
+            product = Product(tenant_id=tenant_id, **fields)
+            db.add(product)
             created += 1
+
+        # Computed once per row, here - never at search time (see
+        # app/services/product_embedding.py). A re-imported row always
+        # overwrites every field above unconditionally (not just the ones
+        # that changed), so recomputing unconditionally here matches that.
+        await set_product_embedding(product)
 
     await db.flush()
     return ProductImportResult(created=created, updated=updated, skipped=skipped, errors=errors)

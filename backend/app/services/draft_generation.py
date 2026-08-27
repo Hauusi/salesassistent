@@ -129,9 +129,13 @@ async def generate_draft(
     context_text = _format_context(history)
 
     # Angebotsanfragen (typ=anfrage) get product grounding: search the
-    # catalog for keyword matches in the request and hand the results to
-    # the model so it can quote concrete prices/specs instead of just
-    # asking the customer to wait for a human to look them up.
+    # catalog (keyword + semantic - see app/services/product_search.py)
+    # for the request and hand the results to the model so it can quote
+    # concrete prices/specs instead of just asking the customer to wait
+    # for a human to look them up. `email.embedding` is reused as the
+    # search's query vector rather than computing a second one here - it
+    # was already paid for during classification (see
+    # app/services/pipeline.py), of the same subject+body text.
     matched_products: list[Product] = []
     product_context_block = ""
     if email.typ == TypKategorie.ANFRAGE:
@@ -139,6 +143,7 @@ async def generate_draft(
             db,
             tenant_id=email.tenant_id,
             query_text=f"{email.subject or ''}\n{email.raw_content}",
+            query_embedding=email.embedding,
         )
         if matched_products:
             rendered = format_products_for_prompt(matched_products)

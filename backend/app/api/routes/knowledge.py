@@ -20,6 +20,7 @@ from app.models.product import Product
 from app.models.tenant import Tenant
 from app.schemas.email import EmailOut
 from app.schemas.product import ProductCreateIn, ProductImportResult, ProductOut, ProductUpdateIn
+from app.services.product_embedding import fields_affect_embedding, set_product_embedding
 from app.services.product_import import import_products_csv
 from app.services.product_search import search_products_by_text
 
@@ -99,6 +100,10 @@ async def create_product(
 ) -> Product:
     product = Product(tenant_id=tenant.id, **payload.model_dump())
     db.add(product)
+    await db.flush()
+    # Computed once, here - never at search time (see
+    # app/services/product_embedding.py).
+    await set_product_embedding(product)
     await db.commit()
     await db.refresh(product)
     return product
@@ -143,8 +148,14 @@ async def update_product(
     tenant: Tenant = Depends(get_current_tenant),
 ) -> Product:
     product = await _get_product_or_404(db, tenant, product_id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changed_fields = payload.model_dump(exclude_unset=True)
+    for key, value in changed_fields.items():
         setattr(product, key, value)
+    # Recomputed only if this touched a field the embedding is derived
+    # from - a price/availability/specs-only edit isn't worth another
+    # Voyage call (see app/services/product_embedding.py).
+    if fields_affect_embedding(set(changed_fields)):
+        await set_product_embedding(product)
     await db.commit()
     await db.refresh(product)
     return product

@@ -12,6 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
 from app.models.tenant import Tenant
+from app.services import embeddings
+
+
+@pytest.fixture(autouse=True)
+def _stub_product_embeddings(monkeypatch) -> list[str]:
+    """Every create/update/import call now computes an embedding (see
+    app/services/product_embedding.py) - stubbed here so these tests cover
+    the catalog CRUD/import contract without a real Voyage call. Returns
+    the list of embedded texts, so a test can assert on call count/content."""
+    calls: list[str] = []
+
+    async def _embed_text(text: str, *, client=None) -> list[float]:
+        calls.append(text)
+        return [0.1] * 1024
+
+    monkeypatch.setattr(embeddings, "embed_text", _embed_text)
+    return calls
 
 _CSV = (
     "name,description,category,sku,price,currency,availability,specs\n"
@@ -139,6 +156,64 @@ async def test_product_crud_roundtrip(api_client, tenant: Tenant) -> None:
         f"/api/knowledge/products/{product_id}", json={"name": "Weg"}
     )
     assert gone.status_code == 404
+
+
+async def test_creating_a_product_computes_its_embedding(
+    api_client, db_session: AsyncSession, tenant: Tenant, _stub_product_embeddings: list[str]
+) -> None:
+    created = await api_client.post(
+        "/api/knowledge/products",
+        json={"name": "Lichtleiste LED", "description": "Lineares LED-Leuchtmittel"},
+    )
+    assert created.status_code == 201
+
+    product = await db_session.get(Product, created.json()["id"])
+    assert product.embedding is not None
+    assert len(_stub_product_embeddings) == 1
+    assert "Lichtleiste LED" in _stub_product_embeddings[0]
+    assert "Lineares LED-Leuchtmittel" in _stub_product_embeddings[0]
+
+
+async def test_updating_an_unrelated_field_does_not_recompute_the_embedding(
+    api_client, tenant: Tenant, _stub_product_embeddings: list[str]
+) -> None:
+    """price/availability/specs don't feed the embedding text - recomputing
+    on every edit would spend a Voyage call for no reason (see
+    app/services/product_embedding.py)."""
+    created = await api_client.post(
+        "/api/knowledge/products", json={"name": "Testprodukt", "price": "9.99"}
+    )
+    product_id = created.json()["id"]
+    assert len(_stub_product_embeddings) == 1  # from the create above
+
+    updated = await api_client.put(
+        f"/api/knowledge/products/{product_id}", json={"price": "12.00", "availability": "Auf Lager"}
+    )
+    assert updated.status_code == 200
+    assert len(_stub_product_embeddings) == 1, "an unrelated-field edit must not recompute"
+
+
+async def test_updating_the_description_recomputes_the_embedding(
+    api_client, db_session: AsyncSession, tenant: Tenant, _stub_product_embeddings: list[str]
+) -> None:
+    created = await api_client.post("/api/knowledge/products", json={"name": "Testprodukt"})
+    product_id = created.json()["id"]
+    assert len(_stub_product_embeddings) == 1
+
+    updated = await api_client.put(
+        f"/api/knowledge/products/{product_id}", json={"description": "Neue Beschreibung"}
+    )
+    assert updated.status_code == 200
+    assert len(_stub_product_embeddings) == 2
+    assert "Neue Beschreibung" in _stub_product_embeddings[1]
+
+
+async def test_csv_import_computes_an_embedding_per_row(
+    api_client, tenant: Tenant, _stub_product_embeddings: list[str]
+) -> None:
+    response = await _import(api_client, _CSV)
+    assert response.status_code == 200, response.text
+    assert len(_stub_product_embeddings) == 2  # one per CSV row
 
 
 async def test_knowledge_search_only_returns_information_mails(
