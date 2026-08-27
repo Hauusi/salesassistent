@@ -167,6 +167,8 @@ export const api = {
   listMailboxes: () => request<Mailbox[]>("/api/mailboxes"),
   pollMailboxNow: (id: string) =>
     request<PollTrigger>(`/api/mailboxes/${id}/poll-now`, { method: "POST" }),
+  deleteMailbox: (id: string) =>
+    request<void>(`/api/mailboxes/${id}`, { method: "DELETE" }),
 
   listProducts: (params?: { q?: string; category?: string }) =>
     request<Product[]>(`/api/knowledge/products${queryString({ ...params })}`),

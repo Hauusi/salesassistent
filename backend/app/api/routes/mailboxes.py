@@ -11,6 +11,7 @@ from app.db import get_db
 from app.models.mailbox import Mailbox
 from app.models.tenant import Tenant
 from app.schemas.mailbox import MailboxOut, PollTriggerOut
+from app.services.mailbox_cleanup import delete_mailbox_and_orphans
 from app.workers.queue import enqueue_poll
 
 router = APIRouter(prefix="/api/mailboxes", tags=["mailboxes"])
@@ -43,3 +44,25 @@ async def poll_now(
         # is more useful than silently stacking a second one.
         return PollTriggerOut(job_id=None, status="already_running")
     return PollTriggerOut(job_id=job.id, status="enqueued")
+
+
+@router.delete("/{mailbox_id}", status_code=204, response_model=None)
+async def delete_mailbox(
+    mailbox_id: uuid.UUID, db: AsyncSession = Depends(get_db), tenant: Tenant = Depends(get_current_tenant)
+) -> None:
+    """Removes a connected mailbox.
+
+    Previously only possible via direct SQL. Mail, drafts, attachments and
+    product suggestions cascade at the database level; contacts/cases left
+    referencing zero remaining mail are cleaned up alongside them - see
+    app/services/mailbox_cleanup.py for why that can't be a plain CASCADE.
+    """
+    result = await db.execute(
+        select(Mailbox).where(Mailbox.id == mailbox_id, Mailbox.tenant_id == tenant.id)
+    )
+    mailbox = result.scalar_one_or_none()
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Postfach nicht gefunden.")
+
+    await delete_mailbox_and_orphans(db, mailbox=mailbox)
+    await db.commit()

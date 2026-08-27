@@ -41,6 +41,7 @@ export default function ConnectClient({
     []
   );
   const [pollingId, setPollingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pollMessage, setPollMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -60,6 +61,27 @@ export default function ConnectClient({
       setActionError(errorMessage(cause));
     } finally {
       setPollingId(null);
+    }
+  }
+
+  async function handleRemove(mb: Mailbox) {
+    if (
+      !confirm(
+        `Postfach "${mb.email_address}" wirklich entfernen? Alle zugehörigen Mails, Entwürfe, ` +
+          "Anhänge und Produktvorschläge werden unwiderruflich gelöscht."
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setDeletingId(mb.id);
+    try {
+      await api.deleteMailbox(mb.id);
+      refresh();
+    } catch (cause) {
+      setActionError(errorMessage(cause));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -120,9 +142,18 @@ export default function ConnectClient({
                     <PollStatus mailbox={mb} />
                   </div>
                 </div>
-                <button onClick={() => handlePollNow(mb.id)} disabled={pollingId === mb.id}>
-                  {pollingId === mb.id ? "Wird gestartet…" : "Jetzt abrufen"}
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => handlePollNow(mb.id)} disabled={pollingId === mb.id}>
+                    {pollingId === mb.id ? "Wird gestartet…" : "Jetzt abrufen"}
+                  </button>
+                  <button
+                    className="btn-danger"
+                    onClick={() => handleRemove(mb)}
+                    disabled={deletingId === mb.id}
+                  >
+                    {deletingId === mb.id ? "Wird entfernt…" : "Postfach entfernen"}
+                  </button>
+                </div>
               </div>
             </div>
           ))}

@@ -112,6 +112,43 @@
         }
       }
     },
+    "/api/mailboxes/{mailbox_id}": {
+      "delete": {
+        "tags": [
+          "mailboxes"
+        ],
+        "summary": "Delete Mailbox",
+        "description": "Removes a connected mailbox.\n\nPreviously only possible via direct SQL. Mail, drafts, attachments and\nproduct suggestions cascade at the database level; contacts/cases left\nreferencing zero remaining mail are cleaned up alongside them - see\napp/services/mailbox_cleanup.py for why that can't be a plain CASCADE.",
+        "operationId": "delete_mailbox_api_mailboxes__mailbox_id__delete",
+        "parameters": [
+          {
+            "name": "mailbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Mailbox Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/drafts": {
       "get": {
         "tags": [

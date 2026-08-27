@@ -76,6 +76,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mailboxes/{mailbox_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Mailbox
+         * @description Removes a connected mailbox.
+         *
+         *     Previously only possible via direct SQL. Mail, drafts, attachments and
+         *     product suggestions cascade at the database level; contacts/cases left
+         *     referencing zero remaining mail are cleaned up alongside them - see
+         *     app/services/mailbox_cleanup.py for why that can't be a plain CASCADE.
+         */
+        delete: operations["delete_mailbox_api_mailboxes__mailbox_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drafts": {
         parameters: {
             query?: never;
@@ -975,6 +1000,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PollTriggerOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_mailbox_api_mailboxes__mailbox_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mailbox_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
