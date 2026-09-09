@@ -67,6 +67,35 @@ NEWSLETTER_MAIL = {
     },
 }
 
+GOOGLE_SYSTEM_MAIL = {
+    "subject": "Google-Konto Aktivierungsbestätigung",
+    "sender_address": "noreply-accounts@google.com",
+    "sender_name": "Google",
+    "body": (
+        "Hallo,\n\nIhr Google-Konto wurde erfolgreich aktiviert. Falls Sie das nicht "
+        "waren, sichern Sie Ihr Konto umgehend ab.\n\nDies ist eine automatisch "
+        "generierte Nachricht, bitte antworten Sie nicht darauf."
+    ),
+    "expected": {
+        "wichtigkeits_kategorie": "information",
+        "typ": "keiner",
+    },
+}
+
+MICROSOFT_SYSTEM_MAIL = {
+    "subject": "Sicherheitswarnung für Ihr Microsoft-Konto",
+    "sender_address": "no-reply@microsoft.com",
+    "sender_name": "Microsoft-Konto-Team",
+    "body": (
+        "Wir haben eine neue Anmeldung bei Ihrem Konto von einem unbekannten Gerät "
+        "festgestellt. Falls Sie das waren, ist keine weitere Aktion erforderlich."
+    ),
+    "expected": {
+        "wichtigkeits_kategorie": "information",
+        "typ": "keiner",
+    },
+}
+
 SPAM_MAIL = {
     "subject": "URGENT: Verify your account now or lose access!!!",
     "sender_address": "security-alert@paypa1-secure.ru",

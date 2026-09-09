@@ -136,6 +136,23 @@ class Settings(BaseSettings):
         "zahlungsdaten,payment details"
     )
 
+    # --- Automated-sender hint (app/services/classification.py) ---
+    # Domains of platforms whose noreply@/no-reply@ addresses are almost
+    # always automated system/security notifications (account
+    # confirmations, privacy-policy updates, login alerts) rather than a
+    # human writing in - a signal the newsletter pre-filter above misses,
+    # since these mails usually have no List-Unsubscribe header and are not
+    # bulk marketing. Fed to the classify_email() LLM call as an additional
+    # context hint, never as a hard short-circuit like the newsletter
+    # pre-filter: an actual customer inquiry that happens to be forwarded
+    # from, say, a noreply@ ticketing address must still be classifiable as
+    # 'anfrage' if its content says so. Comma-separated, overridable per
+    # deployment for the same reason as the newsletter settings above.
+    automated_noreply_sender_domains: str = (
+        "google.com,accounts.google.com,microsoft.com,live.com,outlook.com,"
+        "microsoftonline.com,apple.com,amazon.com"
+    )
+
     # --- Product search ---
     # Postgres text-search configuration used to stem and stop-word both
     # the catalog text and the inquiry (see app/services/product_search.py).
@@ -202,6 +219,10 @@ class Settings(BaseSettings):
     @property
     def newsletter_human_review_terms_list(self) -> list[str]:
         return _split_terms(self.newsletter_human_review_terms)
+
+    @property
+    def automated_noreply_sender_domains_set(self) -> frozenset[str]:
+        return frozenset(_split_terms(self.automated_noreply_sender_domains))
 
 
 def _split_terms(raw: str) -> list[str]:

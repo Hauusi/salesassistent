@@ -11,11 +11,13 @@ import pytest
 
 from app.config import get_settings
 from app.models.enums import TypKategorie, WichtigkeitsKategorie
-from app.services.classification import classify_email
+from app.services.classification import _is_known_automated_sender, classify_email
 from tests.fixtures.emails import (
     ANFRAGE_MAIL,
     BESTELLUNG_MAIL,
+    GOOGLE_SYSTEM_MAIL,
     INFORMATION_MAIL,
+    MICROSOFT_SYSTEM_MAIL,
     NEWSLETTER_MAIL,
     SPAM_MAIL,
 )
@@ -153,6 +155,72 @@ async def test_classify_email_strips_quoted_thread_from_prompt() -> None:
 
     user_content = client.messages.calls[0]["messages"][0]["content"]
     assert "alter, fuer die Klassifikation irrelevanter" not in user_content
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [GOOGLE_SYSTEM_MAIL, MICROSOFT_SYSTEM_MAIL],
+    ids=lambda f: f["sender_address"],
+)
+async def test_automated_platform_system_mail_is_not_classified_as_anfrage(fixture: dict) -> None:
+    """Regression: 'Google Play Datenschutzeinstellungen Update' and
+    'Google-Konto Aktivierungsbestätigung' were previously misclassified as
+    typ=anfrage, which wrongly created a Case with deal_stage=ANFRAGE and
+    could trigger a draft/reply attempt for a mail nobody actually sent."""
+    client = _client_for(fixture["expected"])
+
+    result = await classify_email(
+        subject=fixture["subject"],
+        sender_address=fixture["sender_address"],
+        body=fixture["body"],
+        client=client,
+    )
+
+    assert result.typ == TypKategorie.KEINER
+    assert result.typ != TypKategorie.ANFRAGE
+
+    # The fixed enum response above only proves the mapping; this proves
+    # the model actually got the signal to make that call in the first
+    # place (see classification._automated_sender_hint).
+    user_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "automatisierte No-Reply-Adresse" in user_content
+
+
+async def test_automated_sender_hint_is_not_added_for_a_genuine_inquiry() -> None:
+    """The hint must not leak into a real customer inquiry's prompt - a
+    stray false positive there could bias the model against a genuine
+    'anfrage' it would otherwise have gotten right."""
+    client = _client_for(ANFRAGE_MAIL["expected"])
+
+    await classify_email(
+        subject=ANFRAGE_MAIL["subject"],
+        sender_address=ANFRAGE_MAIL["sender_address"],
+        body=ANFRAGE_MAIL["body"],
+        client=client,
+    )
+
+    user_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "automatisierte No-Reply-Adresse" not in user_content
+
+
+@pytest.mark.parametrize(
+    "sender_address, expected",
+    [
+        ("noreply-accounts@google.com", True),
+        ("no-reply@microsoft.com", True),
+        ("noreply@accounts.google.com", True),
+        ("no_reply@login.microsoftonline.com", True),
+        # Not a noreply-style local part at all.
+        ("security@google.com", False),
+        # noreply, but not on a known platform domain - a real supplier's
+        # transactional sender must not be swept up by this heuristic.
+        ("noreply@musterkunde.de", False),
+        # A genuine customer address.
+        ("einkauf@musterkunde.de", False),
+    ],
+)
+def test_is_known_automated_sender(sender_address: str, expected: bool) -> None:
+    assert _is_known_automated_sender(sender_address) is expected
 
 
 async def test_classify_email_skips_llm_call_for_unambiguous_newsletter() -> None:

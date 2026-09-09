@@ -10,6 +10,7 @@ parsing free text.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -58,8 +59,12 @@ _CLASSIFY_TOOL = {
                 "enum": [e.value for e in TypKategorie],
                 "description": (
                     "bestellung: konkrete Bestellung/Auftrag. "
-                    "anfrage: Anfrage nach Angebot/Produkt/Leistung, noch keine Bestellung. "
-                    "keiner: trifft keines von beiden zu."
+                    "anfrage: Anfrage nach Angebot/Produkt/Leistung durch einen (potenziellen) "
+                    "Kunden, noch keine Bestellung - NICHT: automatisierte System-/"
+                    "Kontobenachrichtigungen (z.B. Sicherheitshinweis, Aktivierungsbestätigung, "
+                    "Datenschutz-Update eines Diensts wie Google/Microsoft), auch wenn sie "
+                    "Formulierungen wie 'bestätigen' oder 'jetzt aktualisieren' enthalten. "
+                    "keiner: trifft keines von beiden zu (u.a. reine System-/Sicherheitsmails)."
                 ),
             },
             "confidence": {
@@ -115,10 +120,57 @@ _SYSTEM_PROMPT = (
     "E-Mail per Tool-Aufruf 'classify_email' genau einer Wichtigkeits- und einer "
     "Typ-Kategorie zu. Sei konservativ bei spam_verdacht - nur eindeutig "
     "unerwünschte/betrügerische Mails, im Zweifel eher 'newsletter' oder 'information'. "
+    "Automatisierte No-Reply-System-/Sicherheitsbenachrichtigungen (z.B. "
+    "Kontoaktivierung, Datenschutz-/Nutzungsbedingungen-Update, Login-Warnung, "
+    "Passwort-Reset-Bestätigung) von Diensten wie Google, Microsoft, Apple etc. sind "
+    "KEINE Anfrage (typ=keiner) - auch wenn kein List-Unsubscribe-Header vorhanden ist "
+    "und kein klassischer Newsletter-Massenversand vorliegt. Ordne solche Mails "
+    "'information' oder 'newsletter' zu, je nachdem ob es eine einmalige Systemmeldung "
+    "oder eine wiederkehrende automatisierte Benachrichtigung ist. Entscheidend ist "
+    "immer der Inhalt: eine echte inhaltliche Anfrage eines (potenziellen) Kunden bleibt "
+    "'anfrage', auch wenn sie zufällig von einer no-reply-Adresse weitergeleitet wurde. "
     "Enthält die Mail außerdem eine eigene Artikelnummer mit zugehörigem Artikeltext "
     "(z.B. eine Lieferantenankündigung eines neuen Produkts), fülle zusätzlich "
     "detected_product_sku/-name/-description; sonst lasse diese drei Felder leer."
 )
+
+# Local-part pattern for a "no reply" mailbox - covers noreply@, no-reply@,
+# no_reply@ and prefixed variants like noreply-accounts@ (the actual sender
+# of the "Google-Konto Aktivierungsbestätigung" example this was written
+# for). Intentionally loose: false positives here only add a context hint
+# to the LLM call, never a hard decision (see _automated_sender_hint).
+_NOREPLY_LOCAL_PART_RE = re.compile(r"^no[-_]?reply", re.IGNORECASE)
+
+
+def _is_known_automated_sender(sender_address: str) -> bool:
+    """True if `sender_address` looks like a noreply@/no-reply@ mailbox on
+    a known platform domain (see automated_noreply_sender_domains in
+    app/config.py) - a strong signal against 'anfrage', but not proof on
+    its own, so this only ever feeds a hint into the classify_email() LLM
+    call rather than short-circuiting it (unlike the newsletter
+    pre-filter's List-Unsubscribe check)."""
+    if "@" not in sender_address:
+        return False
+    local_part, _, domain = sender_address.rpartition("@")
+    if not _NOREPLY_LOCAL_PART_RE.match(local_part):
+        return False
+    domain = domain.lower()
+    return any(
+        domain == known or domain.endswith(f".{known}")
+        for known in get_settings().automated_noreply_sender_domains_set
+    )
+
+
+def _automated_sender_hint(sender_address: str) -> str:
+    if not _is_known_automated_sender(sender_address):
+        return ""
+    return (
+        "\n\nHinweis: Absenderadresse ist eine automatisierte No-Reply-Adresse einer "
+        "bekannten Plattform - typischerweise eine System-/Sicherheitsbenachrichtigung "
+        "(z.B. Kontobestätigung, Datenschutz-Update), keine Kundenanfrage. Inhalt der "
+        "Mail bleibt trotzdem entscheidend: falls es sich dennoch um eine echte "
+        "inhaltliche Anfrage handelt, diesen Hinweis ignorieren."
+    )
 
 
 @dataclass
@@ -143,6 +195,7 @@ def _build_user_message(*, subject: str | None, sender_address: str, body: str) 
         f"Absender: {sender_address}\n"
         f"Betreff: {subject or '(kein Betreff)'}\n\n"
         f"Inhalt:\n{truncated_body}"
+        f"{_automated_sender_hint(sender_address)}"
     )
 
 
