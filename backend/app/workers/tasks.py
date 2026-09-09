@@ -23,6 +23,7 @@ from app.models.enums import ActionActor, MailboxPollStatus
 from app.models.mailbox import Mailbox
 from app.services import gmail_client
 from app.services.action_log_service import log_action
+from app.services.case_stage_service import apply_stale_offer_transitions
 from app.services.pipeline import process_incoming_email
 from app.workers.queue import enqueue_poll
 
@@ -258,3 +259,19 @@ def enqueue_poll_for_all_active_mailboxes() -> int:
     still queued or running."""
     mailbox_ids = asyncio.run(_run_and_dispose(_list_active_mailbox_ids()))
     return sum(1 for mailbox_id in mailbox_ids if enqueue_poll(mailbox_id) is not None)
+
+
+async def _apply_stale_offer_transitions_and_commit() -> int:
+    async with async_session_factory() as db:
+        count = await apply_stale_offer_transitions(db)
+        await db.commit()
+        return count
+
+
+def run_case_stage_sweep() -> int:
+    """Called by the scheduler on each tick, alongside the mail poll
+    enqueue above. NACHFASSEN is the one deal_stage transition that fires
+    on the *absence* of an event (no reply within N days) rather than on
+    one - see app/services/case_stage_service.py - so it needs a periodic
+    sweep instead of a call site to hook into."""
+    return asyncio.run(_run_and_dispose(_apply_stale_offer_transitions_and_commit()))

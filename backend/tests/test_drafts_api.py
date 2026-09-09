@@ -14,9 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.action_log import ActionLog
+from app.models.case import Case
 from app.models.draft import Draft
 from app.models.email_message import EmailMessage
-from app.models.enums import DraftStatus, EmailStatus, TypKategorie, WichtigkeitsKategorie
+from app.models.enums import DealStage, DraftStatus, EmailStatus, TypKategorie, WichtigkeitsKategorie
 from app.models.mailbox import Mailbox
 from app.models.tenant import Tenant
 
@@ -64,6 +65,25 @@ async def draft(db_session: AsyncSession, tenant: Tenant) -> Draft:
         status=DraftStatus.ENTWURF,
     )
     db_session.add(draft)
+    await db_session.commit()
+    return draft
+
+
+@pytest.fixture
+async def draft_with_case(db_session: AsyncSession, tenant: Tenant, draft: Draft) -> Draft:
+    """Same as `draft`, but its source email belongs to a Case - the
+    precondition for the ANFRAGE -> ANGEBOT_ERSTELLT transition on approve
+    (see app/services/case_stage_service.py)."""
+    case = Case(tenant_id=tenant.id, title="Testcase")
+    db_session.add(case)
+    await db_session.flush()
+
+    email = (
+        await db_session.execute(
+            select(EmailMessage).where(EmailMessage.id == draft.email_message_id)
+        )
+    ).scalar_one()
+    email.case_id = case.id
     await db_session.commit()
     return draft
 
@@ -123,6 +143,29 @@ async def test_approve_marks_the_source_mail_as_done(
         )
     ).scalar_one()
     assert email.status is EmailStatus.ERLEDIGT
+
+
+async def test_approve_moves_the_case_from_anfrage_to_angebot_erstellt(
+    api_client, db_session: AsyncSession, draft_with_case: Draft, sent_messages: list[dict]
+) -> None:
+    email = (
+        await db_session.execute(
+            select(EmailMessage).where(EmailMessage.id == draft_with_case.email_message_id)
+        )
+    ).scalar_one()
+    case = (await db_session.execute(select(Case).where(Case.id == email.case_id))).scalar_one()
+    assert case.deal_stage is DealStage.ANFRAGE  # sanity check on the default
+
+    response = await api_client.post(f"/api/drafts/{draft_with_case.id}/approve")
+
+    assert response.status_code == 200, response.text
+    await db_session.refresh(case)
+    assert case.deal_stage is DealStage.ANGEBOT_ERSTELLT
+
+    actions = (
+        await db_session.execute(select(ActionLog.action).where(ActionLog.entity_id == case.id))
+    ).scalars().all()
+    assert "deal_stage_changed" in actions
 
 
 async def test_a_second_approval_is_rejected_and_sends_nothing(

@@ -1,6 +1,7 @@
 import type {
   CaseStatus,
   ContactLastStatus,
+  DealStage,
   DraftStatus,
   EmailStatus,
   Typ,
@@ -55,6 +56,34 @@ export const CASE_STATUS_LABELS: Record<CaseStatus, string> = {
   offen: "Offen",
   geschlossen: "Geschlossen",
 };
+
+/** Sales-pipeline stage of a Case - see DealStage in the backend
+ * (app/models/enums.py) for the transition rules. */
+export const DEAL_STAGE_LABELS: Record<DealStage, string> = {
+  anfrage: "Anfrage",
+  angebot_erstellt: "Angebot erstellt",
+  nachfassen: "Nachfassen",
+  gewonnen: "Gewonnen",
+  verloren: "Verloren",
+};
+
+export const DEAL_STAGE_CLASS: Record<DealStage, string> = {
+  anfrage: "badge badge-muted",
+  angebot_erstellt: "badge badge-info",
+  nachfassen: "badge badge-warn",
+  gewonnen: "badge badge-success",
+  verloren: "badge badge-danger",
+};
+
+/** Fixed pipeline order for grouping/tabs - not alphabetical, so a
+ * pipeline view reads left-to-right the way a deal actually progresses. */
+export const DEAL_STAGE_ORDER: DealStage[] = [
+  "anfrage",
+  "angebot_erstellt",
+  "nachfassen",
+  "gewonnen",
+  "verloren",
+];
 
 /** Status of a contact's most recent inquiry - see ContactLastStatus in the
  * backend (derived from EmailStatus + CaseStatus, not a stored field). */

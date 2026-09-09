@@ -42,6 +42,22 @@ class CaseStatus(str, enum.Enum):
     GESCHLOSSEN = "geschlossen"
 
 
+class DealStage(str, enum.Enum):
+    """Where a Case stands in the sales pipeline - see
+    app/services/case_stage_service.py for the transition rules.
+
+    ANFRAGE, ANGEBOT_ERSTELLT and NACHFASSEN are all set automatically by
+    the pipeline; GEWONNEN/VERLOREN only ever by an explicit human action
+    (PATCH /api/cases/{id}/stage) - the automatic transitions never set or
+    move a case out of either."""
+
+    ANFRAGE = "anfrage"
+    ANGEBOT_ERSTELLT = "angebot_erstellt"
+    NACHFASSEN = "nachfassen"
+    GEWONNEN = "gewonnen"
+    VERLOREN = "verloren"
+
+
 class ActionActor(str, enum.Enum):
     SYSTEM = "system"
     USER = "user"

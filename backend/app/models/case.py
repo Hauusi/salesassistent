@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.base import TenantScopedMixin, TimestampMixin, UUIDPKMixin
-from app.models.enums import CaseStatus
+from app.models.enums import CaseStatus, DealStage
 
 
 class Case(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
@@ -22,6 +23,18 @@ class Case(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[CaseStatus] = mapped_column(
         Enum(CaseStatus, native_enum=False), nullable=False, default=CaseStatus.OFFEN
+    )
+
+    # Sales-pipeline stage - see app/services/case_stage_service.py for how
+    # each value is reached. deal_stage_changed_at is deliberately its own
+    # column rather than reusing TimestampMixin.updated_at, which bumps on
+    # *any* change to the row (a title edit, say) - the NACHFASSEN sweep
+    # needs "time since the stage last changed" specifically.
+    deal_stage: Mapped[DealStage] = mapped_column(
+        Enum(DealStage, native_enum=False), nullable=False, default=DealStage.ANFRAGE
+    )
+    deal_stage_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     contacts = relationship("CaseContact", back_populates="case", cascade="all, delete-orphan")

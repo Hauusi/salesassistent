@@ -233,6 +233,15 @@ button:disabled {
   background: var(--danger-bg);
 }
 
+.btn-success {
+  background: transparent;
+  border-color: var(--success-text);
+  color: var(--success-text);
+}
+.btn-success:hover {
+  background: var(--success-bg);
+}
+
 textarea,
 input[type="text"] {
   font: inherit;

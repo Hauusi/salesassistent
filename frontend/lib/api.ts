@@ -30,6 +30,7 @@ export type Typ = Schemas["TypKategorie"];
 export type EmailStatus = Schemas["EmailStatus"];
 export type DraftStatus = Schemas["DraftStatus"];
 export type CaseStatus = Schemas["CaseStatus"];
+export type DealStage = Schemas["DealStage"];
 
 export type Contact = Schemas["ContactOut"];
 export type ContactLastStatus = Schemas["ContactLastStatus"];
@@ -145,8 +146,14 @@ export const api = {
   }) => request<EmailMessage[]>(`/api/emails${queryString({ ...params })}`),
   getEmail: (id: string) => request<EmailMessage>(`/api/emails/${id}`),
 
-  listCases: () => request<CaseListItem[]>("/api/cases"),
+  listCases: (params?: { deal_stage?: DealStage }) =>
+    request<CaseListItem[]>(`/api/cases${queryString({ ...params })}`),
   getCase: (id: string) => request<CaseDetail>(`/api/cases/${id}`),
+  setCaseStage: (id: string, dealStage: "gewonnen" | "verloren") =>
+    request<CaseDetail>(`/api/cases/${id}/stage`, {
+      method: "PATCH",
+      body: JSON.stringify({ deal_stage: dealStage }),
+    }),
 
   listContacts: (params?: { followup_days?: number }) =>
     request<ContactListItem[]>(

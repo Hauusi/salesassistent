@@ -162,6 +162,13 @@ class Settings(BaseSettings):
     # `followup_days` query param on /api/contacts.
     contact_followup_threshold_days: int = 5
 
+    # --- Deal pipeline (app/services/case_stage_service.py) ---
+    # A case still in ANGEBOT_ERSTELLT with no incoming mail for this many
+    # days moves automatically to NACHFASSEN - checked on every scheduler
+    # tick (see app/workers/run_scheduler.py). Same documented-default
+    # rationale as contact_followup_threshold_days above; defaults to the
+    # same value since both answer "how long is too long to wait".
+    case_followup_threshold_days: int = 5
 
     # --- Derived views on the comma-separated settings above -------------
     #

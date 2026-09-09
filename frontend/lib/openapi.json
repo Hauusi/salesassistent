@@ -548,17 +548,45 @@
         ],
         "summary": "List Cases",
         "operationId": "list_cases_api_cases_get",
+        "parameters": [
+          {
+            "name": "deal_stage",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DealStage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deal Stage"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/CaseListItemOut"
                   },
-                  "type": "array",
                   "title": "Response List Cases Api Cases Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -585,6 +613,60 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cases/{case_id}/stage": {
+      "patch": {
+        "tags": [
+          "cases"
+        ],
+        "summary": "Set Case Stage",
+        "description": "Manually marks a case GEWONNEN or VERLOREN - the only two stages a\nhuman sets directly (see app/services/case_stage_service.py); every\nother stage is pipeline-driven. `force=True` here deliberately: a\nhuman correcting a mistake (moving a case back out of GEWONNEN/\nVERLOREN, or between the two) must always be possible, unlike an\nautomatic transition.",
+        "operationId": "set_case_stage_api_cases__case_id__stage_patch",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseStageUpdateIn"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1279,6 +1361,14 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "deal_stage": {
+            "$ref": "#/components/schemas/DealStage"
+          },
+          "deal_stage_changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deal Stage Changed At"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -1309,6 +1399,8 @@
           "title",
           "summary",
           "status",
+          "deal_stage",
+          "deal_stage_changed_at",
           "created_at",
           "contacts",
           "email_count",
@@ -1341,6 +1433,14 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "deal_stage": {
+            "$ref": "#/components/schemas/DealStage"
+          },
+          "deal_stage_changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deal Stage Changed At"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -1364,6 +1464,8 @@
           "title",
           "summary",
           "status",
+          "deal_stage",
+          "deal_stage_changed_at",
           "created_at",
           "contacts",
           "email_count"
@@ -1410,6 +1512,18 @@
           "created_at"
         ],
         "title": "CaseOut"
+      },
+      "CaseStageUpdateIn": {
+        "properties": {
+          "deal_stage": {
+            "$ref": "#/components/schemas/DealStage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deal_stage"
+        ],
+        "title": "CaseStageUpdateIn"
       },
       "CaseStatus": {
         "type": "string",
@@ -1633,6 +1747,18 @@
           "company"
         ],
         "title": "ContactOut"
+      },
+      "DealStage": {
+        "type": "string",
+        "enum": [
+          "anfrage",
+          "angebot_erstellt",
+          "nachfassen",
+          "gewonnen",
+          "verloren"
+        ],
+        "title": "DealStage",
+        "description": "Where a Case stands in the sales pipeline - see\napp/services/case_stage_service.py for the transition rules.\n\nANFRAGE, ANGEBOT_ERSTELLT and NACHFASSEN are all set automatically by\nthe pipeline; GEWONNEN/VERLOREN only ever by an explicit human action\n(PATCH /api/cases/{id}/stage) - the automatic transitions never set or\nmove a case out of either."
       },
       "DraftOut": {
         "properties": {

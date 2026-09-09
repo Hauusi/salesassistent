@@ -3,6 +3,7 @@
 import type {
   CaseStatus,
   ContactLastStatus,
+  DealStage,
   DraftStatus,
   EmailStatus,
   Typ,
@@ -10,6 +11,8 @@ import type {
 } from "@/lib/api";
 import {
   CONTACT_STATUS_CLASS,
+  DEAL_STAGE_CLASS,
+  DEAL_STAGE_LABELS,
   statusLabel,
   TYP_LABELS,
   WICHTIGKEIT_CLASS,
@@ -41,4 +44,10 @@ export function ContactStatusBadge({ value }: { value: ContactLastStatus | null 
 export function FollowUpBadge({ show }: { show: boolean }) {
   if (!show) return null;
   return <span className="badge badge-danger">Follow-up nötig</span>;
+}
+
+/** Pipeline stage of a Case - see DealStage in the backend
+ * (app/models/enums.py). */
+export function DealStageBadge({ value }: { value: DealStage }) {
+  return <span className={DEAL_STAGE_CLASS[value]}>{DEAL_STAGE_LABELS[value]}</span>;
 }

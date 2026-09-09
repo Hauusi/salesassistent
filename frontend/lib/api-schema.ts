@@ -256,6 +256,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cases/{case_id}/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Case Stage
+         * @description Manually marks a case GEWONNEN or VERLOREN - the only two stages a
+         *     human sets directly (see app/services/case_stage_service.py); every
+         *     other stage is pipeline-driven. `force=True` here deliberately: a
+         *     human correcting a mistake (moving a case back out of GEWONNEN/
+         *     VERLOREN, or between the two) must always be possible, unlike an
+         *     automatic transition.
+         */
+        patch: operations["set_case_stage_api_cases__case_id__stage_patch"];
+        trace?: never;
+    };
     "/api/contacts": {
         parameters: {
             query?: never;
@@ -459,6 +484,12 @@ export interface components {
             /** Summary */
             summary: string | null;
             status: components["schemas"]["CaseStatus"];
+            deal_stage: components["schemas"]["DealStage"];
+            /**
+             * Deal Stage Changed At
+             * Format: date-time
+             */
+            deal_stage_changed_at: string;
             /**
              * Created At
              * Format: date-time
@@ -483,6 +514,12 @@ export interface components {
             /** Summary */
             summary: string | null;
             status: components["schemas"]["CaseStatus"];
+            deal_stage: components["schemas"]["DealStage"];
+            /**
+             * Deal Stage Changed At
+             * Format: date-time
+             */
+            deal_stage_changed_at: string;
             /**
              * Created At
              * Format: date-time
@@ -510,6 +547,10 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** CaseStageUpdateIn */
+        CaseStageUpdateIn: {
+            deal_stage: components["schemas"]["DealStage"];
         };
         /**
          * CaseStatus
@@ -584,6 +625,18 @@ export interface components {
             /** Company */
             company: string | null;
         };
+        /**
+         * DealStage
+         * @description Where a Case stands in the sales pipeline - see
+         *     app/services/case_stage_service.py for the transition rules.
+         *
+         *     ANFRAGE, ANGEBOT_ERSTELLT and NACHFASSEN are all set automatically by
+         *     the pipeline; GEWONNEN/VERLOREN only ever by an explicit human action
+         *     (PATCH /api/cases/{id}/stage) - the automatic transitions never set or
+         *     move a case out of either.
+         * @enum {string}
+         */
+        DealStage: "anfrage" | "angebot_erstellt" | "nachfassen" | "gewonnen" | "verloren";
         /** DraftOut */
         DraftOut: {
             /**
@@ -1272,7 +1325,9 @@ export interface operations {
     };
     list_cases_api_cases_get: {
         parameters: {
-            query?: never;
+            query?: {
+                deal_stage?: components["schemas"]["DealStage"] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1288,6 +1343,15 @@ export interface operations {
                     "application/json": components["schemas"]["CaseListItemOut"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_case_api_cases__case_id__get: {
@@ -1300,6 +1364,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_case_stage_api_cases__case_id__stage_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaseStageUpdateIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

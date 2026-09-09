@@ -29,7 +29,7 @@ from app.models.case import Case, CaseContact
 from app.models.contact import Contact
 from app.models.draft import Draft
 from app.models.email_message import EmailMessage
-from app.models.enums import ActionActor, EmailStatus, WichtigkeitsKategorie
+from app.models.enums import ActionActor, DealStage, EmailStatus, WichtigkeitsKategorie
 from app.models.limits import fit
 from app.models.mailbox import Mailbox
 from app.services import case_matching, classification, embeddings
@@ -115,7 +115,22 @@ async def _get_or_create_case(
         return match.case, False, match.similarity
 
     title = suggested_title or subject or f"Korrespondenz mit {contact.email_address}"
-    case = Case(tenant_id=tenant_id, title=fit(title, Case, "title"))
+    # deal_stage=ANFRAGE is also the column's own default, but set
+    # explicitly here since this exact moment - a mail that didn't match
+    # an existing case - is precisely "a new inquiry came in" (see
+    # app/services/case_stage_service.py). deal_stage_changed_at is set in
+    # Python rather than left to the column's server_default: with
+    # expire_on_commit=False (see app/db.py) a server-generated default is
+    # never reflected back onto this in-memory object, so any code later
+    # in the same request that reads it back would see None instead of
+    # the value the row actually has.
+    now = datetime.now(UTC)
+    case = Case(
+        tenant_id=tenant_id,
+        title=fit(title, Case, "title"),
+        deal_stage=DealStage.ANFRAGE,
+        deal_stage_changed_at=now,
+    )
     db.add(case)
     await db.flush()
     db.add(CaseContact(case_id=case.id, contact_id=contact.id))

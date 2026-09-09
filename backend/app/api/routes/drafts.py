@@ -21,13 +21,14 @@ from app.api.deps import get_current_tenant, get_current_user
 from app.db import get_db
 from app.models.draft import Draft
 from app.models.email_message import EmailMessage
-from app.models.enums import ActionActor, DraftStatus, EmailStatus
+from app.models.enums import ActionActor, DealStage, DraftStatus, EmailStatus
 from app.models.mailbox import Mailbox
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.draft import DraftOut, DraftRejectIn, DraftUpdateIn
 from app.services import gmail_client
 from app.services.action_log_service import log_action
+from app.services.case_stage_service import set_deal_stage
 
 router = APIRouter(prefix="/api/drafts", tags=["drafts"])
 
@@ -221,6 +222,21 @@ async def approve_draft(
     draft.gmail_sent_message_id = sent_message_id
     draft.status = DraftStatus.VERSENDET
     email.status = EmailStatus.ERLEDIGT
+
+    # Pipeline stage: a reply just went out, so the case moves to
+    # ANGEBOT_ERSTELLT (see app/services/case_stage_service.py). Guarded by
+    # set_deal_stage's own terminal-stage check, so approving a draft on an
+    # already GEWONNEN/VERLOREN case can't silently reopen it.
+    if email.case is not None and set_deal_stage(email.case, DealStage.ANGEBOT_ERSTELLT):
+        await log_action(
+            db,
+            tenant_id=tenant.id,
+            actor=ActionActor.SYSTEM,
+            entity_type="case",
+            entity_id=email.case.id,
+            action="deal_stage_changed",
+            detail={"deal_stage": DealStage.ANGEBOT_ERSTELLT.value, "reason": "draft_sent"},
+        )
 
     await log_action(
         db,
